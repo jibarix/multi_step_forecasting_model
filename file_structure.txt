@@ -1,24 +1,38 @@
 forecasting_project/
-├── .env                        # [HIDDEN] Environment variables (SUPABASE credentials)
+├── .env                        # Environment variables (SUPABASE credentials)
 ├── config/
-│   ├── __init__.py             # [EXISTING] Import configuration modules
-│   ├── db_config.py            # [EXISTING] Database and dataset configurations
-│   └── model_config.py         # [EXISTING] Model configurations and hyperparameters
+│   ├── __init__.py             # Import configuration modules
+│   ├── db_config.py            # Database and dataset configurations
+│   └── model_config.py         # Model configurations and hyperparameters
 ├── data/
-│   ├── __init__.py             # [EXISTING] Import data modules
-│   ├── connectors.py           # [EXISTING] Database connection utilities
-│   ├── data_utils.py           # [EXISTING] Data manipulation utilities
-│   └── preprocessor.py         # [EXISTING] Data preprocessing functionality
+│   ├── __init__.py             # Import data modules
+│   ├── connectors.py           # Database connection utilities
+│   ├── data_utils.py           # Data manipulation utilities
+│   ├── preprocessor.py         # Data preprocessing functionality
+│   └── multi_frequency.py      # Multi-frequency data handling
 ├── models/
-│   ├── __init__.py             # [EXISTING] Import model modules
-│   ├── linear_models.py        # [EXISTING] Linear regression models
-│   ├── time_series_models.py   # [EXISTING] ARIMA, Prophet models
-│   ├── ensemble_models.py      # [EXISTING] Random forest, gradient boosting models
-│   ├── model_factory.py        # [EXISTING] Automatically generate predictive models
-│   └── evaluator.py            # [EXISTING] Model evaluation utilities
+│   ├── __init__.py             # Import model modules
+│   ├── linear_models.py        # Linear regression models
+│   ├── time_series_models.py   # ARIMA, Prophet models
+│   ├── ensemble_models.py      # Random forest, gradient boosting models
+│   ├── lightgbm_model.py       # LightGBM implementation
+│   ├── hierarchical_forecaster.py # Hierarchical forecasting
+│   ├── anchor_selection.py     # Dynamic anchor variable selection
+│   ├── model_factory.py        # Automatically generate predictive models
+│   └── evaluator.py            # Model evaluation utilities
 ├── visualization/
-│   ├── __init__.py             # [EXISTING] Import visualization modules
-│   └── plots.py                # [EXISTING] Plotting utilities
+│   ├── __init__.py             # Import visualization modules
+│   └── plots.py                # Plotting utilities
+├── dimension_reduction/
+│   ├── __init__.py             # Import dimension reduction modules [EMPTY]
+│   ├── pca_handler.py          # PCA implementation for variables [EMPTY]
+│   └── feature_clustering.py   # Variable clustering utilities [EMPTY]
+├── api/
+│   ├── __init__.py             # API module initialization [MISSING]
+│   ├── router.py               # API routing [MISSING]
+│   └── server.py               # API server implementation [MISSING]
 ├── outputs/                    # Directory for model outputs and visualizations
-├── main.py                     # [EXISTING] Main script to run the pipeline
-└── requirements.txt            # [EXISTING] Project dependencies
+├── main.py                     # Main script to run the pipeline
+├── api_server.py               # Script to run the API server [MISSING]
+├── project_guide.txt           # Project documentation
+└── requirements.txt            # Project dependencies

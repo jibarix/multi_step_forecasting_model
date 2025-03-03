@@ -1,152 +1,65 @@
-Technical Specification for Multi-Step Forecasting Model with Dynamic Anchor Variables and Multi-Frequency Adjustments
+Based on our discussion, the revised `project_guide.txt` should include:
 
-Objective:
+# Technical Specification for Multi-Step Forecasting Model with Dynamic Anchor Variables and Multi-Frequency Adjustments
 
-The purpose of this econometric model is to forecast vehicle sales () using a multi-step, hierarchical approach that allows for:
-	1.	Dynamic selection of an anchor variable, rather than relying solely on GDP growth. The model should flexibly allow alternative macroeconomic indicators such as the Federal Funds Rate (FFR), Inflation Rate (CPI), Consumer Confidence Index (CCI), or others.
-	2.	Handling discrepancies in time aggregation, where the target variable (vehicle sales) is monthly, but explanatory variables and forecasts may be provided quarterly, annually, or over multi-year horizons (e.g., next 3 or 5 years).
+## Objective
 
-Step 1: Dynamic Selection of Anchor Variable
+Build an econometric model to forecast vehicle sales using a multi-step, hierarchical approach that:
+1. Dynamically selects optimal anchor variables based on statistical criteria, rather than relying solely on GDP growth
+2. Handles discrepancies in time aggregation between target variables (monthly) and explanatory variables (quarterly/annually)
 
-Rather than hardcoding GDP growth as the anchor variable, the model should allow for alternative macroeconomic indicators based on empirical relevance. Potential anchor variables include:
-	•	Gross Domestic Product (GDP) growth () – typically forecasted annually/quarterly
-	•	Federal Funds Rate (FFR) () – available monthly but forecasted in different time horizons
-	•	Inflation Rate (CPI) () – available monthly/quarterly
-	•	Consumer Confidence Index (CCI) () – monthly, but less commonly forecasted long-term
-	•	Other leading indicators
+## Step 1: Dynamic Selection of Anchor Variables
 
-The selection of the anchor variable () should be determined using:
-	•	Granger causality tests to assess predictive power
-	•	Information criteria (AIC, BIC, RMSE, MAE) to compare forecasting accuracy
-	•	Economic theory and expert judgment
+Rather than hardcoding GDP growth as the anchor variable, the model will dynamically select the most relevant economic indicators:
+- Potential anchors include GDP growth, Federal Funds Rate (FFR), Inflation Rate (CPI), Consumer Confidence Index (CCI)
+- Selection criteria:
+  - Granger causality tests
+  - Information criteria (AIC, BIC)
+  - Forecasting accuracy metrics (RMSE, MAE)
+  - Economic domain knowledge
 
-Once the most suitable anchor variable is identified, it will serve as the primary input for forecasting intermediary economic variables.
+## Step 2: Two-Stage Forecasting Process
 
+### First Stage: Intermediate Variable Forecasting
+- Use the selected anchor variables to forecast intermediate economic variables
+- Apply dimension reduction (PCA) to handle multicollinearity and reduce computational complexity
+- Align different frequencies using temporal disaggregation techniques
 
+### Second Stage: Target Variable Forecasting
+- Train multiple model types on the target variable (vehicle sales)
+- Select the best performing model based on validation metrics
+- Use the forecasted intermediate variables as inputs to predict the target
 
-where:
-	•	 is the selected anchor variable, dynamically chosen based on statistical performance.
-	•	 is adjusted depending on the available frequency (e.g., if quarterly, ; if annual, ).
+## Step 3: Multi-Frequency Data Handling
 
-Step 2: Forecasting Intermediary Variables with Time Aggregation Adjustments
+- Handle different data frequencies (monthly, quarterly, annual)
+- Apply techniques like:
+  - Temporal disaggregation (Denton method)
+  - Mixed Data Sampling (MIDAS) models
+  - Frequency alignment methods
 
-Since intermediary variables () may also have different frequencies than the anchor variable and target variable, the model must align data across time frequencies.
-	1.	Handling Forecasted Macroeconomic Variables with Lower Frequency
-	•	If GDP growth or the Federal Funds Rate is forecasted annually but we need monthly projections, apply:
-	•	Temporal disaggregation techniques (Denton method, Chow-Lin regression, or Fernandez models) to interpolate monthly values.
-	•	Mixed Data Sampling (MIDAS) models, which allow for predicting high-frequency data using low-frequency variables without interpolation.
-	•	Distributed Lag Models, incorporating multi-period smoothing.
-	2.	Forecasting Each Intermediary Variable
-Each economic variable is modeled as a function of the selected anchor variable and past values:
+## Step 4: Hierarchical Consistency
 
-	•	If data is quarterly or annual, convert it into monthly values using interpolation or MIDAS models.
-	•	If forecasting for multiple years (3-year or 5-year projections), extrapolate using long-horizon time-series models (e.g., VAR, ARIMA, Bayesian forecasting).
+- Ensure forecasts are consistent across different aggregation levels
+- Apply hierarchical reconciliation methods:
+  - Bottom-up approach
+  - Top-down approach
+  - Optimal combination methods
 
-Step 3: Forecasting the Target Variable (Vehicle Sales) from Intermediary Variables
+## Step 5: Evaluation and Validation
 
-Once forecasted values of the six intermediary economic variables () are obtained, they serve as inputs to predict monthly vehicle sales:
+- Use time-series cross-validation
+- Compare model performance against naive benchmarks
+- Evaluate robustness across different economic scenarios
+- Assess coherence of hierarchical forecasts
 
+## Implementation Framework
 
+- Modular architecture with separate components for:
+  - Data access and preprocessing
+  - Anchor variable selection
+  - Model training and evaluation
+  - Forecasting and visualization
+- Scalable approach that allows for easy updates as new data becomes available
 
-where:
-	•	 is monthly vehicle sales.
-	•	 are the predicted intermediary variables from Step 2.
-	•	 can be one of the following models:
-	•	Multiple linear regression (MLR)
-	•	Vector autoregressive (VAR) models
-	•	Machine learning methods (Random Forest, Neural Networks) if nonlinear relationships exist
-
-Handling Forecast Discrepancies:
-	•	If intermediary variable forecasts are quarterly or annually, a forecasting reconciliation method (such as hierarchical forecasting) is used to ensure consistency across timeframes.
-	•	If vehicle sales need to be forecasted 3 or 5 years ahead, the model should extend its time horizon using long-term macroeconomic projections.
-
-Step 4: Model Selection and Validation
-
-1. Anchor Variable Selection Process
-
-To ensure that the most predictive and relevant anchor variable is chosen, the model should implement a data-driven selection approach based on:
-	•	Granger causality tests: To determine whether changes in potential anchor variables (e.g., GDP growth, FFR, CPI) statistically precede changes in intermediary variables.
-	•	Information criteria (AIC, BIC, RMSE, MAE): To compare how well different models perform when using alternative anchor variables.
-	•	Cross-validation and out-of-sample forecasting tests: To evaluate how different anchor variables influence forecast accuracy in historical data.
-	•	Economic theory and expert judgment: To ensure that the selected anchor variable aligns with known economic relationships.
-
-The final selection should be adaptive, allowing for scenario analysis where different anchor variables can be tested to assess their effects on the forecasting results.
-
-2. Intermediary Variable Model Selection
-
-Each intermediary economic variable is forecasted separately based on the selected anchor variable. The choice of forecasting method depends on the nature of the variable:
-	•	Univariate Time-Series Models (if historical patterns dominate):
-	•	ARIMA (if stationary)
-	•	Exponential smoothing (ETS)
-	•	Bayesian structural time-series models (BSTS) for long-horizon forecasting
-	•	Multivariate Models (if relationships with other economic indicators are strong):
-	•	Vector Autoregression (VAR)
-	•	Error Correction Models (ECM) if cointegration is present
-	•	Mixed-Frequency Models (if explanatory variables have different frequencies):
-	•	Mixed Data Sampling (MIDAS)
-	•	Kalman filter-based state-space models
-
-After selecting the best model for each variable, forecasts () are generated and used in the vehicle sales model.
-
-3. Final Vehicle Sales Model Selection
-
-The final model predicting monthly vehicle sales () should account for:
-	1.	Forecasted intermediary variables () as explanatory inputs.
-	2.	Time dependencies (lags, seasonality, trends).
-	3.	Macroeconomic uncertainty and forecast errors from earlier steps.
-
-The choice of model should depend on the data structure and forecasting accuracy:
-	•	Traditional Econometric Models
-	•	Multiple Linear Regression (MLR): If relationships between  and  are linear and independent.
-	•	Vector Autoregression (VAR): If vehicle sales and intermediary variables exhibit mutual influence over time.
-	•	Autoregressive Distributed Lag (ARDL) / Error Correction Model (ECM): If long-term relationships exist between the variables (cointegration).
-	•	Time-Series and Machine Learning Models
-	•	SARIMA (Seasonal ARIMA): If sales have strong seasonal patterns and need time-dependent modeling.
-	•	Random Forest / Gradient Boosting (XGBoost, LightGBM): If relationships are nonlinear and interaction effects exist.
-	•	Long Short-Term Memory (LSTM) Neural Networks: If deep-learning techniques are preferred for capturing time dependencies.
-
-The final model should be selected based on:
-	•	Out-of-sample forecasting accuracy (RMSE, MAE, MAPE).
-	•	Stability and interpretability (VAR and ARDL models are preferred if interpretability is required).
-	•	Scenario flexibility, allowing different economic assumptions to be tested.
-
-4. Forecast Reconciliation and Scenario Testing
-
-Given that forecasts originate from different time horizons (monthly, quarterly, annual, 3-year, and 5-year projections), the model should include forecast reconciliation techniques to ensure consistency across different time frames:
-	•	Temporal Aggregation Reconciliation: Ensures that monthly vehicle sales forecasts sum up correctly to quarterly and annual projections.
-	•	Bottom-up approach: Monthly forecasts are aggregated to form quarterly/annual projections.
-	•	Top-down approach: Annual/quarterly forecasts are disaggregated using historical monthly patterns.
-	•	Middle-out approach: A hybrid method optimizing accuracy between levels.
-	•	Uncertainty Quantification
-	•	Monte Carlo simulations: To assess how different macroeconomic scenarios affect vehicle sales.
-	•	Sensitivity Analysis: Evaluates how much variation in intermediary variables affects the final forecast.
-	•	Scenario-Based Forecasting
-	•	Baseline (most likely) scenario
-	•	Optimistic scenario (higher GDP growth, lower interest rates)
-	•	Pessimistic scenario (economic downturn, policy shocks)
-
-This ensures that the model provides reliable and adaptable forecasts for strategic decision-making.
-
-Step 5: Implementation and Model Deployment
-
-Once the model is validated, it should be implemented as a dynamic forecasting tool that can:
-	1.	Automatically update with new macroeconomic forecasts.
-	2.	Incorporate different anchor variables dynamically based on available forecasts.
-	3.	Provide scenario-based forecasting outputs for long-term planning.
-	4.	Adjust for discrepancies in data frequency without manual interventions.
-
-Deployment options:
-	•	Python/R-based forecasting pipeline (Jupyter, R Shiny, Flask API)
-	•	Excel with automated scripts for business users
-	•	Cloud-based dashboard (Power BI, Tableau with backend models in AWS/Azure)
-
-This ensures that forecasts remain flexible, transparent, and actionable for decision-makers.
-
-Summary of the Multi-Step Forecasting Approach
-	1.	Dynamically select the best anchor variable based on data-driven testing.
-	2.	Use robust statistical models to forecast intermediary variables.
-	3.	Develop a final predictive model for vehicle sales, incorporating time-series and machine learning methods.
-	4.	Ensure consistency across different time horizons using forecast reconciliation techniques.
-	5.	Deploy the model in a way that supports real-time updates and scenario analysis.
-
-This structured methodology ensures a scalable, data-driven, and adaptable vehicle sales forecasting system.
+This architecture provides a flexible economic forecasting system that leverages optimal anchor variables and handles multi-frequency data to produce accurate and consistent forecasts.
