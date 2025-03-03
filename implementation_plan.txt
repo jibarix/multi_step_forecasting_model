@@ -1,0 +1,280 @@
+# Implementation Plan for Enhanced Economic Forecasting System
+
+After reviewing your codebase, I can see you have a solid foundation for economic forecasting with modules for data handling, preprocessing, modeling, and visualization. To enhance this system with modern advanced forecasting capabilities like dynamic anchor variables and multi-step forecasting, I recommend the following implementation plan.
+
+## 1. Overview of Current Structure
+
+Your project currently features:
+- Data connectors to Supabase
+- Data preprocessing and feature engineering
+- Multiple model types (linear, time series, ensemble)
+- Evaluation and visualization tools
+- A main script that orchestrates the workflow
+
+## 2. Implementation Strategy
+
+I propose enhancing your system with key improvements based on modern forecasting research:
+
+### A. Dynamic Anchor Variable Selection
+
+Create a new module to dynamically select the best economic indicators (anchor variables) for forecasting:
+
+```python
+from statsmodels.tsa.stattools import grangercausalitytests
+import numpy as np
+import pandas as pd
+
+class AnchorVariableSelector:
+    """Select optimal anchor variables based on statistical tests and predictive power."""
+    
+    def __init__(self):
+        self.granger_results = {}
+        self.correlation_results = {}
+        self.feature_importance = {}
+        
+    def granger_causality_test(self, df, target_col, max_lag=12, significance=0.05):
+        """Test Granger causality between potential anchor variables and target."""
+        results = {}
+        target = df[target_col]
+        
+        for column in df.columns:
+            if column != target_col:
+                data = pd.concat([target, df[column]], axis=1)
+                try:
+                    test_result = grangercausalitytests(data, max_lag, verbose=False)
+                    # Extract p-values for each lag
+                    p_values = [test_result[i+1][0]['ssr_chi2test'][1] for i in range(max_lag)]
+                    # Check if any lag shows causality at the specified significance level
+                    causes_target = any(p < significance for p in p_values)
+                    # Find the best lag (lowest p-value)
+                    best_lag = np.argmin(p_values) + 1
+                    
+                    results[column] = {
+                        'causes_target': causes_target,
+                        'best_lag': best_lag,
+                        'min_p_value': min(p_values)
+                    }
+                except:
+                    # Skip if test fails due to stationarity issues, etc.
+                    continue
+        
+        self.granger_results = results
+        return results
+    
+    def select_best_anchors(self, df, target_col, n_anchors=3, methods=['granger', 'correlation', 'importance']):
+        """Select the best n anchor variables using multiple methods."""
+        candidates = []
+        
+        if 'granger' in methods and not self.granger_results:
+            self.granger_causality_test(df, target_col)
+            
+        # Collect candidates from Granger causality
+        if 'granger' in methods and self.granger_results:
+            granger_candidates = [col for col, result in self.granger_results.items() 
+                                if result['causes_target']]
+            granger_candidates.sort(key=lambda x: self.granger_results[x]['min_p_value'])
+            candidates.extend(granger_candidates[:n_anchors])
+        
+        # Return unique list of best anchors
+        return list(dict.fromkeys(candidates))[:n_anchors]
+```
+
+### B. Multi-Frequency Data Handler
+
+Implement advanced methods to handle data at different time frequencies:
+
+```python
+class MultiFrequencyHandler:
+    """Handle data with different frequencies (monthly, quarterly, etc.)."""
+    
+    def temporal_disaggregation(self, low_freq_df, high_freq_indicator, method='denton'):
+        """
+        Disaggregate low-frequency data to higher frequency.
+        
+        Args:
+            low_freq_df: DataFrame with low-frequency data (e.g. quarterly)
+            high_freq_indicator: DataFrame with high-frequency data (e.g. monthly)
+            method: Method to use ('denton', 'chow_lin')
+            
+        Returns:
+            DataFrame with disaggregated data at high frequency
+        """
+        # Implementation of Denton method or Chow-Lin method
+        # This would align quarterly data to monthly data using correlation patterns
+        
+        # Pseudocode for the implementation:
+        # 1. Ensure both DataFrames have compatible date indexes
+        # 2. Create aggregation matrix mapping high frequency to low frequency
+        # 3. Apply chosen method to distribute low-frequency values
+        # 4. Return resulting high-frequency series
+        
+        # Placeholder implementation - this would need a full statsmodels-based solution
+        pass
+```
+
+### C. Enhanced Time Series Model with LightGBM
+
+Based on the M5 competition findings, add LightGBM model support:
+
+```python
+import lightgbm as lgb
+from sklearn.metrics import mean_squared_error
+import numpy as np
+
+class LightGBMForecastModel:
+    """LightGBM model for time series forecasting with dynamic anchor variables."""
+    
+    def __init__(self, params=None):
+        self.model = None
+        self.params = params or {
+            'objective': 'regression',
+            'metric': 'rmse',
+            'boosting_type': 'gbdt',
+            'num_leaves': 31,
+            'learning_rate': 0.05,
+            'feature_fraction': 0.9,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 5,
+            'verbose': -1
+        }
+        self.feature_importances = None
+    
+    def fit(self, X, y, categorical_features=None):
+        """Fit the LightGBM model."""
+        train_data = lgb.Dataset(
+            X, 
+            label=y,
+            categorical_feature=categorical_features if categorical_features else 'auto'
+        )
+        
+        self.model = lgb.train(
+            self.params,
+            train_data,
+            num_boost_round=1000,
+            valid_sets=[train_data],
+            early_stopping_rounds=50,
+            verbose_eval=False
+        )
+        
+        # Store feature importances
+        self.feature_importances = {
+            name: importance for name, importance in zip(
+                X.columns, 
+                self.model.feature_importance(importance_type='gain')
+            )
+        }
+        
+        return self
+    
+    def predict(self, X):
+        """Generate predictions."""
+        if self.model is None:
+            raise ValueError("Model must be trained before making predictions.")
+        return self.model.predict(X)
+    
+    def get_feature_importance(self):
+        """Return feature importances."""
+        if self.feature_importances is None:
+            raise ValueError("Model must be trained to get feature importances.")
+        return self.feature_importances
+```
+
+### D. Hierarchical Forecasting Support
+
+Add capability for consistent forecasting across different aggregation levels:
+
+```python
+class HierarchicalForecaster:
+    """Generate consistent forecasts across hierarchical levels."""
+    
+    def __init__(self, reconciliation_method='bottom_up'):
+        """
+        Initialize hierarchical forecaster.
+        
+        Args:
+            reconciliation_method: Method for reconciling forecasts
+                ('bottom_up', 'top_down', 'middle_out', 'optimal_combination')
+        """
+        self.reconciliation_method = reconciliation_method
+        self.hierarchy = None
+        self.models = {}
+        
+    def set_hierarchy(self, hierarchy_dict):
+        """
+        Set hierarchy structure.
+        
+        Args:
+            hierarchy_dict: Dictionary defining the hierarchical structure
+            Example: {'total': ['region1', 'region2'], 'region1': ['store1', 'store2']}
+        """
+        self.hierarchy = hierarchy_dict
+        
+    def fit_models(self, data_dict, target_col, features, model_class, **model_params):
+        """
+        Fit models at each level of the hierarchy.
+        
+        Args:
+            data_dict: Dictionary of DataFrames for each node in hierarchy
+            target_col: Target column name
+            features: Feature columns to use
+            model_class: Model class to use
+            **model_params: Parameters for the model
+        """
+        for node, df in data_dict.items():
+            model = model_class(**model_params)
+            X = df[features]
+            y = df[target_col]
+            model.fit(X, y)
+            self.models[node] = model
+            
+    def forecast(self, future_features_dict, steps=1):
+        """
+        Generate reconciled forecasts across the hierarchy.
+        
+        Args:
+            future_features_dict: Dictionary of DataFrames with future features
+            steps: Number of steps to forecast
+            
+        Returns:
+            Dictionary of reconciled forecasts for each node
+        """
+        base_forecasts = {}
+        
+        # Generate base forecasts from each model
+        for node, model in self.models.items():
+            future_X = future_features_dict[node]
+            base_forecasts[node] = model.predict(future_X)
+        
+        # Apply reconciliation method
+        if self.reconciliation_method == 'bottom_up':
+            reconciled_forecasts = self._reconcile_bottom_up(base_forecasts)
+        elif self.reconciliation_method == 'top_down':
+            reconciled_forecasts = self._reconcile_top_down(base_forecasts)
+        else:
+            # Default to no reconciliation
+            reconciled_forecasts = base_forecasts
+            
+        return reconciled_forecasts
+```
+
+## 3. Implementation Steps
+
+I recommend proceeding with this implementation in the following steps:
+
+1. **Create new modules**:
+   - `models/anchor_selection.py` for dynamic anchor variable selection
+   - `models/lightgbm_model.py` for the LightGBM implementation
+   - `models/hierarchical_forecasting.py` for hierarchical forecasting
+
+2. **Enhance existing modules**:
+   - Add multi-frequency support to `data/preprocessor.py`
+   - Update `models/model_factory.py` to include the new models
+   - Add new visualization functions to `visualizations/plots.py`
+
+3. **Update main script**:
+   - Modify `main.py` to incorporate the new functionality
+   - Add command-line options for the new features
+
+4. **Add unit tests**:
+   - Create test cases for the new functionality
+   - Validate the implementation against synthetic data
