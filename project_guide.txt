@@ -1,65 +1,88 @@
-Based on our discussion, the revised `project_guide.txt` should include:
+# **Technical Specification for 12-Month Vehicle Sales Forecasting Model Anchored on GDP Growth**  
 
-# Technical Specification for Multi-Step Forecasting Model with Dynamic Anchor Variables and Multi-Frequency Adjustments
+## **Objective**  
 
-## Objective
+Develop an econometric forecasting model for **12-month ahead vehicle sales projections** using a structured, multi-step process that:  
 
-Build an econometric model to forecast vehicle sales using a multi-step, hierarchical approach that:
-1. Dynamically selects optimal anchor variables based on statistical criteria, rather than relying solely on GDP growth
-2. Handles discrepancies in time aggregation between target variables (monthly) and explanatory variables (quarterly/annually)
+1. **Uses GDP growth as the anchor variable**, incorporating:  
+   - **GDPNow** (Federal Reserve Bank of Atlanta) for real-time quarterly nowcasts.  
+   - **Congressional Budget Office (CBO) projections** for long-term GDP growth forecasts.  
+   - These quarterly forecasts serve as the **primary economic drivers** of the vehicle sales model.  
 
-## Step 1: Dynamic Selection of Anchor Variables
+2. **Converts quarterly GDP forecasts to monthly values**, ensuring smooth integration into a monthly forecasting model.  
 
-Rather than hardcoding GDP growth as the anchor variable, the model will dynamically select the most relevant economic indicators:
-- Potential anchors include GDP growth, Federal Funds Rate (FFR), Inflation Rate (CPI), Consumer Confidence Index (CCI)
-- Selection criteria:
-  - Granger causality tests
-  - Information criteria (AIC, BIC)
-  - Forecasting accuracy metrics (RMSE, MAE)
-  - Economic domain knowledge
+3. **Forecasts intermediate economic variables** (e.g., employment, disposable income) at a monthly level based on projected GDP growth.  
 
-## Step 2: Two-Stage Forecasting Process
+4. **Generates a 12-month ahead vehicle sales forecast**, ensuring hierarchical consistency and temporal coherence.  
 
-### First Stage: Intermediate Variable Forecasting
-- Use the selected anchor variables to forecast intermediate economic variables
-- Apply dimension reduction (PCA) to handle multicollinearity and reduce computational complexity
-- Align different frequencies using temporal disaggregation techniques
+---
 
-### Second Stage: Target Variable Forecasting
-- Train multiple model types on the target variable (vehicle sales)
-- Select the best performing model based on validation metrics
-- Use the forecasted intermediate variables as inputs to predict the target
+## **Step 1: Input Preparation and Temporal Disaggregation**  
 
-## Step 3: Multi-Frequency Data Handling
+### **Quarterly GDP Forecasts as Inputs**  
+- The model takes as input:  
+  - **GDPNow** real-time quarterly nowcasts.  
+  - **CBO long-term GDP projections** (quarterly frequency).  
+- These forecasts drive the projection of **intermediate economic indicators** and ultimately vehicle sales.  
 
-- Handle different data frequencies (monthly, quarterly, annual)
-- Apply techniques like:
-  - Temporal disaggregation (Denton method)
-  - Mixed Data Sampling (MIDAS) models
-  - Frequency alignment methods
+### **Temporal Disaggregation to Monthly Frequency**  
+- Since GDP data is **quarterly**, the model applies **state-of-the-art disaggregation techniques** to convert it into monthly values:  
+  - **Denton proportional adjustment method** (widely used by statistical agencies for aligning quarterly-to-monthly data).  
+  - **Chow-Lin regression-based interpolation**, where additional monthly indicators (e.g., industrial production, employment) guide the distribution.  
+  - **Mixed Data Sampling (MIDAS) regression**, if high-frequency leading indicators are available.  
+- The chosen method ensures **consistency across different time horizons** while preserving key economic patterns.  
 
-## Step 4: Hierarchical Consistency
+---
 
-- Ensure forecasts are consistent across different aggregation levels
-- Apply hierarchical reconciliation methods:
-  - Bottom-up approach
-  - Top-down approach
-  - Optimal combination methods
+## **Step 2: Forecasting Intermediate Economic Indicators**  
 
-## Step 5: Evaluation and Validation
+- Based on the **disaggregated monthly GDP forecasts**, the model projects **other key macroeconomic indicators**, such as:  
+  - **Employment rates**  
+  - **Consumer spending / disposable income**  
+  - **Interest rates (Federal Funds Rate, Treasury yields)**  
+  - **Inflation (CPI, PPI)**  
+- This step ensures that all necessary inputs are at a **monthly frequency**, ready for vehicle sales forecasting.  
 
-- Use time-series cross-validation
-- Compare model performance against naive benchmarks
-- Evaluate robustness across different economic scenarios
-- Assess coherence of hierarchical forecasts
+- **Techniques Used:**  
+  - **Vector autoregression (VAR)**: Models interactions between GDP and economic indicators.  
+  - **Principal Component Analysis (PCA)**: Reduces dimensionality and avoids multicollinearity.  
+  - **Error correction models (ECM)**: Adjusts short-term predictions based on long-term GDP trends.  
 
-## Implementation Framework
+---
 
-- Modular architecture with separate components for:
-  - Data access and preprocessing
-  - Anchor variable selection
-  - Model training and evaluation
-  - Forecasting and visualization
-- Scalable approach that allows for easy updates as new data becomes available
+## **Step 3: Forecasting Monthly Vehicle Sales**  
 
-This architecture provides a flexible economic forecasting system that leverages optimal anchor variables and handles multi-frequency data to produce accurate and consistent forecasts.
+- Once **monthly macroeconomic indicators** are forecasted, they are used to project **vehicle sales** at a 12-month horizon.  
+- The forecasting model is trained on historical data using various techniques:  
+  - **Autoregressive Integrated Moving Average (ARIMA)** with exogenous variables (ARIMAX).  
+  - **Gradient Boosting Methods (XGBoost, LightGBM)** for capturing non-linear relationships.  
+  - **Neural Networks (LSTMs, RNNs)** if long-term dependencies are found in sales patterns.  
+- The best-performing model is **selected based on validation metrics** (RMSE, MAE).  
+
+---
+
+## **Step 4: Ensuring Hierarchical Consistency**  
+
+- Forecasts must be **consistent across different levels** (e.g., regional vs. national sales, car segments).  
+- The model applies **hierarchical reconciliation techniques**, including:  
+  - **Bottom-up approach**: Aggregates segment-level forecasts into a national total.  
+  - **Top-down approach**: Disaggregates total sales into regional/segment forecasts.  
+  - **MinT (Minimum Trace) reconciliation**: Ensures optimal alignment across levels.  
+
+---
+
+## **Step 5: Model Evaluation and Validation**  
+
+- **Time-Series Cross-Validation:** Rolling-origin forecast validation ensures model robustness.  
+- **Benchmarking Against Naïve Models:** Model performance is compared against:  
+  - **Last year’s sales trend (seasonal naive benchmark).**  
+  - **GDP growth correlation-based naive models.**  
+- **Scenario Analysis:** Model is stress-tested against economic downturns and recessions.  
+
+---
+
+## **Implementation Framework**  
+
+- **Modular, scalable architecture** to support continuous updates as new GDP forecasts are released.  
+- **Automated data pipeline** for ingesting GDPNow and CBO projections.  
+- **Flexible model selection framework**, allowing for adaptive improvements as more data becomes available.  

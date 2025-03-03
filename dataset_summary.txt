@@ -1,7 +1,7 @@
                               Dataset  Records                Date Range  Frequency  Revisions
 0                          auto_sales      113  2015-07-01 to 2024-11-01    monthly          0
 1                        bankruptcies      114  2015-07-01 to 2024-12-01    monthly          0
-2                   cement_production      114  2015-07-01 to 2024-12-01    monthly          0
+2                   cement_production      114  2015-07-01 to 2024-12-01    monthly         87
 3             electricity_consumption      113  2015-07-01 to 2024-11-01    monthly         26
 4                           gas_price      113  2015-07-01 to 2024-11-01    monthly         90
 5                     gas_consumption      113  2015-07-01 to 2024-11-01    monthly         68
@@ -11,7 +11,7 @@
 9                 unemployment_claims      113  2015-07-01 to 2024-11-01    monthly          0
 10                   trade_employment      113  2015-07-01 to 2024-11-01    monthly          0
 11               consumer_price_index      113  2015-07-01 to 2024-11-01    monthly         93
-12         transportation_price_index      113  2015-07-01 to 2024-11-01    monthly          0
+12         transportation_price_index      113  2015-07-01 to 2024-11-01    monthly         99
 13                       retail_sales      109  2015-07-01 to 2024-07-01    monthly         83
 14                            imports      113  2015-07-01 to 2024-11-01    monthly         84
 15                 commercial_banking       37  2015-07-01 to 2024-07-01  quarterly          0
@@ -24,4 +24,6 @@
 22         liquidty_credit_facilities      134  2014-01-01 to 2025-02-01    monthly          0
 23  semiconductor_manufacturing_units      133  2014-01-01 to 2025-01-01    monthly          0
 24                aluminum_new_orders      132  2014-01-01 to 2024-12-01    monthly          0
-25                equity_risk_premium      110  2016-01-01 to 2025-02-01    monthly          0
+25                           real_gdp       44  2014-01-01 to 2024-10-01  quarterly          0
+26                   gdp_now_forecast       45  2014-01-01 to 2025-01-01  quarterly          0
+27                equity_risk_premium      110  2016-01-01 to 2025-02-01    monthly          0
