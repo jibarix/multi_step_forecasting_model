@@ -10,20 +10,23 @@ from config.model_config import (
     LINEAR_MODELS,
     TIME_SERIES_MODELS,
     ENSEMBLE_MODELS,
-    NEURAL_NETWORK_MODELS
+    NEURAL_NETWORK_MODELS,
+    LIGHTGBM_MODELS
 )
 from models.linear_models import LinearModel
 from models.time_series_models import TimeSeriesModel
 from models.ensemble_models import EnsembleModel
+from models.lightgbm_model import LightGBMForecastModel
+from models.anchor_selection import AnchorVariableSelector
 
 logger = logging.getLogger(__name__)
 
-def get_model(model_type: str, **kwargs) -> Union[LinearModel, TimeSeriesModel, EnsembleModel]:
+def get_model(model_type: str, **kwargs) -> Union[LinearModel, TimeSeriesModel, EnsembleModel, LightGBMForecastModel]:
     """
     Factory function to create and return a model of the specified type.
     
     Args:
-        model_type: Type of model to create (e.g., 'linear_regression', 'arima', 'random_forest')
+        model_type: Type of model to create (e.g., 'linear_regression', 'arima', 'random_forest', 'lightgbm')
         **kwargs: Additional parameters to override default configuration
     
     Returns:
@@ -38,7 +41,7 @@ def get_model(model_type: str, **kwargs) -> Union[LinearModel, TimeSeriesModel, 
     except ValueError:
         logger.error(f"Unknown model type: {model_type}")
         raise ValueError(f"Unknown model type: {model_type}. Available models: "
-                        f"{LINEAR_MODELS + TIME_SERIES_MODELS + ENSEMBLE_MODELS + NEURAL_NETWORK_MODELS}")
+                        f"{LINEAR_MODELS + TIME_SERIES_MODELS + ENSEMBLE_MODELS + LIGHTGBM_MODELS + NEURAL_NETWORK_MODELS}")
     
     # Override default config with provided kwargs
     config.update(kwargs)
@@ -53,6 +56,9 @@ def get_model(model_type: str, **kwargs) -> Union[LinearModel, TimeSeriesModel, 
     elif model_type in ENSEMBLE_MODELS:
         logger.info(f"Creating ensemble model: {model_type}")
         return EnsembleModel(model_type=model_type, **config)
+    elif model_type in LIGHTGBM_MODELS:
+        logger.info(f"Creating LightGBM model: {model_type}")
+        return LightGBMForecastModel(params=config)
     elif model_type in NEURAL_NETWORK_MODELS:
         logger.error(f"Neural network models not yet implemented: {model_type}")
         raise NotImplementedError(f"Neural network models not yet implemented: {model_type}")
@@ -64,7 +70,7 @@ def create_model_pipeline(
     model_types: List[str],
     ensemble_method: str = 'average',
     **kwargs
-) -> Dict[str, Union[LinearModel, TimeSeriesModel, EnsembleModel]]:
+) -> Dict[str, Union[LinearModel, TimeSeriesModel, EnsembleModel, LightGBMForecastModel]]:
     """
     Create multiple models for an ensemble or comparison pipeline.
     
@@ -113,7 +119,7 @@ def auto_select_model(
     y_val: pd.Series,
     model_types: Optional[List[str]] = None,
     metric: str = 'rmse'
-) -> Union[LinearModel, TimeSeriesModel, EnsembleModel]:
+) -> Union[LinearModel, TimeSeriesModel, EnsembleModel, LightGBMForecastModel]:
     """
     Automatically select the best model based on validation performance.
     
@@ -134,7 +140,8 @@ def auto_select_model(
             'linear_regression',  # Linear
             'ridge',              # Regularized linear
             'arima',              # Time series
-            'random_forest'       # Ensemble
+            'random_forest',      # Ensemble
+            'lightgbm'            # LightGBM
         ]
     
     # Create all models
@@ -163,6 +170,10 @@ def auto_select_model(
                 
                 # Evaluate
                 metrics = model.evaluate(df_val, target_col=y_val.name)
+            elif name.startswith(tuple(LIGHTGBM_MODELS)):
+                # For LightGBM models
+                model.fit(X_train, y_train, eval_set=(X_val, y_val))
+                metrics = model.evaluate(X_val, y_val)
             else:
                 # For traditional ML models
                 model.fit(X_train, y_train)
@@ -198,3 +209,29 @@ def auto_select_model(
         raise ValueError("No valid models were successfully fitted")
     
     return best_model
+
+def select_anchor_variables(
+    df: pd.DataFrame,
+    target_col: str,
+    n_anchors: int = 3,
+    methods: List[str] = ['granger', 'correlation']
+) -> List[str]:
+    """
+    Select the best anchor variables for forecasting based on statistical criteria.
+    
+    Args:
+        df: DataFrame with time series data
+        target_col: Name of target column
+        n_anchors: Number of anchor variables to select
+        methods: Methods to use for selection
+        
+    Returns:
+        List of selected anchor variable names
+    """
+    logger.info(f"Selecting anchor variables for {target_col} using methods: {methods}")
+    
+    selector = AnchorVariableSelector()
+    optimal_anchors = selector.get_optimal_anchor_combination(df, target_col, max_anchors=n_anchors)
+    
+    logger.info(f"Selected optimal anchor variables: {optimal_anchors}")
+    return optimal_anchors

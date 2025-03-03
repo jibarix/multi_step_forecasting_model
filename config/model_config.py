@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 LINEAR_MODELS = ['linear_regression', 'lasso', 'ridge', 'elastic_net']
 TIME_SERIES_MODELS = ['arima', 'sarima', 'prophet', 'ets']
 ENSEMBLE_MODELS = ['random_forest', 'gradient_boosting', 'xgboost']
+LIGHTGBM_MODELS = ['lightgbm', 'lightgbm_classifier', 'lightgbm_regressor']
 NEURAL_NETWORK_MODELS = ['mlp', 'lstm']
 
 # Default model configurations
@@ -99,6 +100,50 @@ DEFAULT_MODEL_CONFIGS = {
         'subsample': 0.8,
         'colsample_bytree': 0.8,
         'objective': 'reg:squarederror',
+        'random_state': 42
+    },
+    
+    # LightGBM models
+    'lightgbm': {
+        'objective': 'regression',
+        'metric': 'rmse',
+        'boosting_type': 'gbdt',
+        'num_leaves': 31,
+        'learning_rate': 0.05,
+        'feature_fraction': 0.9,
+        'bagging_fraction': 0.8,
+        'bagging_freq': 5,
+        'verbose': -1,
+        'n_estimators': 100,
+        'early_stopping_rounds': 50,
+        'random_state': 42
+    },
+    'lightgbm_classifier': {
+        'objective': 'binary',
+        'metric': 'binary_logloss',
+        'boosting_type': 'gbdt',
+        'num_leaves': 31,
+        'learning_rate': 0.05,
+        'feature_fraction': 0.9,
+        'bagging_fraction': 0.8,
+        'bagging_freq': 5,
+        'verbose': -1,
+        'n_estimators': 100,
+        'early_stopping_rounds': 50,
+        'random_state': 42
+    },
+    'lightgbm_regressor': {
+        'objective': 'regression',
+        'metric': 'rmse',
+        'boosting_type': 'gbdt',
+        'num_leaves': 31,
+        'learning_rate': 0.05,
+        'feature_fraction': 0.9,
+        'bagging_fraction': 0.8,
+        'bagging_freq': 5,
+        'verbose': -1,
+        'n_estimators': 100,
+        'early_stopping_rounds': 50,
         'random_state': 42
     },
     
@@ -198,6 +243,41 @@ PARAM_GRIDS = {
         'max_depth': [3, 4, 5, 6],
         'subsample': [0.8, 0.9, 1.0],
         'colsample_bytree': [0.8, 0.9, 1.0],
+    },
+    
+    # LightGBM models
+    'lightgbm': {
+        'num_leaves': [15, 31, 63],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'n_estimators': [50, 100, 200],
+        'max_depth': [-1, 5, 10, 15],
+        'min_child_samples': [5, 10, 20],
+        'subsample': [0.6, 0.8, 1.0],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+        'reg_alpha': [0.0, 0.1, 0.5],
+        'reg_lambda': [0.0, 0.1, 0.5]
+    },
+    'lightgbm_classifier': {
+        'num_leaves': [15, 31, 63],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'n_estimators': [50, 100, 200],
+        'max_depth': [-1, 5, 10, 15],
+        'min_child_samples': [5, 10, 20],
+        'subsample': [0.6, 0.8, 1.0],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+        'reg_alpha': [0.0, 0.1, 0.5],
+        'reg_lambda': [0.0, 0.1, 0.5]
+    },
+    'lightgbm_regressor': {
+        'num_leaves': [15, 31, 63],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'n_estimators': [50, 100, 200],
+        'max_depth': [-1, 5, 10, 15],
+        'min_child_samples': [5, 10, 20],
+        'subsample': [0.6, 0.8, 1.0],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+        'reg_alpha': [0.0, 0.1, 0.5],
+        'reg_lambda': [0.0, 0.1, 0.5]
     },
     
     # Neural network models

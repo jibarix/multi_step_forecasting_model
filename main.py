@@ -89,6 +89,10 @@ def parse_arguments():
     
     parser.add_argument('--model_types', type=str, nargs='+', 
                         default=['linear_regression'],
+                        choices=['linear_regression', 'lasso', 'ridge', 'elastic_net', 
+                                'arima', 'sarima', 'prophet', 'ets',
+                                'random_forest', 'gradient_boosting', 'xgboost',
+                                'lightgbm', 'lightgbm_regressor'],
                         help='Types of models to use (default: linear_regression)')
     
     parser.add_argument('--output_dir', type=str, default='outputs',
@@ -113,6 +117,24 @@ def parse_arguments():
     
     parser.add_argument('--verbose', action='store_true',
                         help='Enable verbose output')
+    
+    # New options for advanced features
+    parser.add_argument('--select_anchors', action='store_true',
+                        help='Automatically select anchor variables based on statistical tests')
+    
+    parser.add_argument('--num_anchors', type=int, default=3,
+                        help='Number of anchor variables to select (default: 3)')
+    
+    parser.add_argument('--multi_frequency', action='store_true',
+                        help='Enable multi-frequency data handling')
+    
+    parser.add_argument('--hierarchical', action='store_true',
+                        help='Enable hierarchical forecasting')
+    
+    parser.add_argument('--reconciliation', type=str, 
+                        choices=['bottom_up', 'top_down', 'middle_out', 'optimal'],
+                        default='bottom_up',
+                        help='Method for hierarchical forecast reconciliation (default: bottom_up)')
     
     return parser.parse_args()
 
