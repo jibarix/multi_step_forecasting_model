@@ -1,0 +1,27 @@
+                              Dataset  Records                Date Range  Frequency  Revisions
+0                          auto_sales      113  2015-07-01 to 2024-11-01    monthly          0
+1                        bankruptcies      114  2015-07-01 to 2024-12-01    monthly          0
+2                   cement_production      114  2015-07-01 to 2024-12-01    monthly          0
+3             electricity_consumption      113  2015-07-01 to 2024-11-01    monthly         26
+4                           gas_price      113  2015-07-01 to 2024-11-01    monthly         90
+5                     gas_consumption      113  2015-07-01 to 2024-11-01    monthly         68
+6                 labor_participation      113  2015-07-01 to 2024-11-01    monthly          0
+7                   unemployment_rate      113  2015-07-01 to 2024-11-01    monthly          0
+8                     employment_rate      113  2015-07-01 to 2024-11-01    monthly         87
+9                 unemployment_claims      113  2015-07-01 to 2024-11-01    monthly          0
+10                   trade_employment      113  2015-07-01 to 2024-11-01    monthly          0
+11               consumer_price_index      113  2015-07-01 to 2024-11-01    monthly         93
+12         transportation_price_index      113  2015-07-01 to 2024-11-01    monthly          0
+13                       retail_sales      109  2015-07-01 to 2024-07-01    monthly         83
+14                            imports      113  2015-07-01 to 2024-11-01    monthly         84
+15                 commercial_banking       37  2015-07-01 to 2024-07-01  quarterly          0
+16                 federal_funds_rate      134  2014-01-01 to 2025-02-01    monthly          0
+17          auto_manufacturing_orders      132  2014-01-01 to 2024-12-01    monthly          0
+18              used_car_retail_sales      132  2014-01-01 to 2024-12-01    monthly          0
+19          domestic_auto_inventories      133  2014-01-01 to 2025-01-01    monthly          0
+20           domestic_auto_production      133  2014-01-01 to 2025-01-01    monthly          0
+21                     auto_loan_rate       38  2015-08-01 to 2024-11-01  quarterly          0
+22         liquidty_credit_facilities      134  2014-01-01 to 2025-02-01    monthly          0
+23  semiconductor_manufacturing_units      133  2014-01-01 to 2025-01-01    monthly          0
+24                aluminum_new_orders      132  2014-01-01 to 2024-12-01    monthly          0
+25                equity_risk_premium      110  2016-01-01 to 2025-02-01    monthly          0

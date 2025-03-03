@@ -1,0 +1,24 @@
+forecasting_project/
+├── .env                        # [HIDDEN] Environment variables (SUPABASE credentials)
+├── config/
+│   ├── __init__.py             # [EXISTING] Import configuration modules
+│   ├── db_config.py            # [EXISTING] Database and dataset configurations
+│   └── model_config.py         # [EXISTING] Model configurations and hyperparameters
+├── data/
+│   ├── __init__.py             # [EXISTING] Import data modules
+│   ├── connectors.py           # [EXISTING] Database connection utilities
+│   ├── data_utils.py           # [EXISTING] Data manipulation utilities
+│   └── preprocessor.py         # [EXISTING] Data preprocessing functionality
+├── models/
+│   ├── __init__.py             # [EXISTING] Import model modules
+│   ├── linear_models.py        # [EXISTING] Linear regression models
+│   ├── time_series_models.py   # [EXISTING] ARIMA, Prophet models
+│   ├── ensemble_models.py      # [EXISTING] Random forest, gradient boosting models
+│   ├── model_factory.py        # [EXISTING] Automatically generate predictive models
+│   └── evaluator.py            # [EXISTING] Model evaluation utilities
+├── visualization/
+│   ├── __init__.py             # [EXISTING] Import visualization modules
+│   └── plots.py                # [EXISTING] Plotting utilities
+├── outputs/                    # Directory for model outputs and visualizations
+├── main.py                     # [EXISTING] Main script to run the pipeline
+└── requirements.txt            # [EXISTING] Project dependencies

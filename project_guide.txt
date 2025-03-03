@@ -1,0 +1,149 @@
+Below is a structured approach to implement your project step by step, from data preparation to model training and forecasting. This outline assumes a typical data science and econometric workflow. Feel free to adapt based on your unique dataset, data availability, and software environment.
+
+---
+
+## 1. Data Preparation
+
+### 1.1. Data Ingestion and Alignment
+1. **Collect all time series data**: 
+   - **Auto sales (Target)** for Puerto Rico (PR).
+   - **Local macroeconomic variables** (e.g., PR GDP, unemployment, inflation, etc.).
+   - **U.S. macroeconomic variables** (e.g., U.S. GDP, Federal Funds Rate, inflation, unemployment, etc.).
+
+2. **Harmonize time indices**:
+   - Ensure all time series use a consistent frequency (monthly, quarterly, etc.).
+   - If the target is monthly, convert or resample other series to a monthly frequency.
+
+3. **Merge into a single table**:
+   - Perform a left-join on the target’s time index (auto sales in PR) so that all rows correspond to the months (or periods) for which auto sales data is available.
+   - For the rest of the macroeconomic variables (local + U.S.), align them with the closest month or period. If any sources are quarterly while auto sales is monthly, you may spread quarterly data across months (e.g., repeating the quarterly value for each of the three months in that quarter).
+
+### 1.2. Handling Missing Values
+1. **Identify missing periods**:
+   - If auto sales is available from, say, 2000-01 to 2024-12, but some macro variables only start at 2000-03, note the missing data in the earliest months.
+   - If some macro data ends earlier than the auto sales data, you will have missing values at the end of the series.
+
+2. **Fill missing values**:
+   - For each independent variable, you can specify a method:
+     - **Same number (carry forward/backfill)** if the variable is relatively stable or if the missing data is short-term.
+     - **Interpolation** if the variable is assumed to change gradually (e.g., GDP, inflation rates).
+     - A combination of forward fill and interpolation depending on the data context.
+   - You mention letting the algorithm decide: practically, you might set up a simple model-selection or cross-validation approach to decide whether forward fill, backward fill, or interpolation yields better predictive performance on a small holdout set. Alternatively, you can decide method by domain knowledge (e.g., an interest rate might more realistically be carried forward).
+
+> **Note**: If you have a large block of missing data (e.g., 12 months missing mid-series), interpolation might not be ideal. Evaluate each variable carefully.
+
+---
+
+## 2. Exploratory Data Analysis
+
+1. **Summary statistics**: For each independent variable and the target, understand means, standard deviations, min/max, and correlations.
+2. **Correlation check**: Identify potential collinearity among independent variables. Highly correlated features may pose issues in regression.
+3. **Stationarity checks** (if relevant): You might check whether variables exhibit trends or non-stationary behavior. Although multiple regression doesn’t necessarily require stationarity in the same sense as time-series models, large-scale trends could complicate interpretation.
+
+---
+
+## 3. Regression Model Building
+
+### 3.1. Model Specification
+- **Dependent Variable (Y)**: Monthly auto sales in Puerto Rico.
+- **Independent Variables (X1, X2, …, Xn)**: 
+  - Local macro factors (e.g., local unemployment, local GDP).
+  - U.S. macro factors (e.g., Fed Funds Rate, U.S. GDP, U.S. unemployment, etc.).
+
+### 3.2. Iterative Selection for “Best” Model
+You mentioned iterating until you get the best combination of low p-values and highest adjusted \( R^2 \). Two main approaches here:
+
+1. **Stepwise Regression**:
+   - *Forward Selection*: Start with no variables, add one at a time based on highest incremental adjusted \( R^2 \) (or greatest significance), stop when adding new variables no longer improves adjusted \( R^2 \).
+   - *Backward Elimination*: Start with all variables, remove the least significant one (highest p-value above a threshold, say 0.10 or 0.05), and continue until all remaining variables are significant.
+   - *Bidirectional*: Combines forward and backward steps.
+
+2. **Information Criteria** (optional alternative to p-values):
+   - Compare models via AIC (Akaike Information Criterion) or BIC (Bayesian Information Criterion). Generally, the model with the lowest AIC/BIC is considered better, balancing goodness of fit with parsimony.
+
+### 3.3. Training the Model
+1. **Split the data**:
+   - If you prefer a time-series approach, it’s common to train on data up to time \( T \) and use a smaller holdout period after \( T \) for validation.
+   - Alternatively, if you have enough data, you can do a rolling window cross-validation or a standard train-test split respecting the time sequence.
+2. **Fit multiple regression**:
+   - Use a standard OLS (Ordinary Least Squares) framework (e.g., `statsmodels` in Python or your preferred tool).
+   - Track p-values, coefficients, confidence intervals, etc.
+3. **Assess Adjusted \( R^2 \)**:
+   - Evaluate each candidate model’s fit.
+   - Make sure to also check residual diagnostics (e.g., residual plots, QQ plots) for any patterns or heteroskedasticity.
+
+### 3.4. Performance Visualization
+- **Plot the fitted model vs. actual auto sales** for the in-sample data.
+- Evaluate how well the model tracks the ups and downs of actual auto sales.
+- If you have a validation set, create a second plot showing out-of-sample predicted vs. actual auto sales.
+
+---
+
+## 4. Forecasting the Target Variable
+
+Once you settle on the best regression model, you will need to forecast each feature over the period for which you want to predict auto sales. Then, you plug these forecasted values into your regression model to obtain the forecast for auto sales.
+
+### 4.1. Specify the Forecast Horizon
+- You will decide how many months ahead you need predictions (e.g., 6, 12, or 24 months).
+
+### 4.2. Feature-Level Forecasting Methods
+
+You indicated a multi-method approach depending on the feature type:
+
+1. **Simple Extrapolation** for trend features:
+   - If a variable shows a clear, stable linear or polynomial trend, you might use a linear extrapolation based on the latest few data points.
+
+2. **Time Series Models** (ARIMA, exponential smoothing) for variables with more complex patterns:
+   - For instance, if the U.S. interest rate or a particular macro factor has seasonality or autocorrelation, ARIMA, SARIMA, or exponential smoothing models can be fit to each feature’s historical series.
+
+3. **Historical Averages** for seasonal components:
+   - If a variable is strongly seasonal (e.g., monthly tourism figures, electricity usage, etc.), you might forecast it by taking the average pattern for that month or applying seasonal decomposition.
+
+4. **Projection Rules for time-based features**:
+   - Some macro indicators might have official forward guidance (e.g., a central bank might project interest rate paths). You can incorporate these forward-looking statements if available.
+
+5. **Recursive Forecasting** for auto-regressive features:
+   - If a feature’s best predictor is its own past values (e.g., last month’s inflation to predict next month’s inflation), you can do a rolling forecast that starts from the last known data point and steps forward one period at a time.
+
+### 4.3. Aggregating Forecasts for Independent Variables
+- After applying each chosen method to each feature, you will have a table of forecasted X1, X2, …, Xn for the future periods.
+- **Combine** them into a consistent feature matrix for each future month.
+
+### 4.4. Predicting Auto Sales
+- Plug the forecasted values of X1, X2, …, Xn into the final regression model.
+- Generate the forecasted auto sales for each future month.
+
+---
+
+## 5. Deliverables
+
+1. **Master Dataset** (historical):
+   - A clean, merged data table with no missing values (or appropriately handled missingness).
+   - Columns for date/time, auto sales, and each macro variable.
+
+2. **Model Summary**:
+   - Regression equation and coefficients (with confidence intervals).
+   - p-values and adjusted \( R^2 \).
+   - AIC/BIC (if used).
+   - Residual diagnostics plots.
+
+3. **Performance Visualization**:
+   - Plot comparing actual vs. predicted auto sales (in-sample).
+   - (Optional) Plot comparing holdout set predictions vs. actual auto sales.
+
+4. **Forecast Output**:
+   - Forecasted values for each independent variable up to the chosen horizon.
+   - Forecasted auto sales for each month in the forecast horizon.
+   - Plot of forecasted auto sales vs. historical auto sales, extending into the future periods.
+
+---
+
+## 6. Potential Considerations & Challenges
+
+1. **Data Quality**: Macroeconomic data can be revised retroactively by government agencies. Decide how to handle revisions (use final revised data or real-time data?).
+2. **Model Assumptions**: 
+   - Linear regression assumes linear relationships. If you suspect nonlinearity, you might consider transformations or polynomial terms.
+   - Check for autocorrelation of residuals (common in time-series data). If present, you might need specialized time-series regression models (e.g., ARIMAX, Vector Autoregression).
+3. **Multicollinearity**: Macroeconomic variables often move in tandem (e.g., GDP, employment). High correlation among variables can inflate variance of coefficient estimates.
+4. **External Shocks**: Out-of-sample forecasts can be disrupted by sudden events (natural disasters, policy changes, global economic recessions). The model may not generalize to these unexpected scenarios.
+5. **Forecast Horizon Length**: The farther you forecast, the larger the uncertainty. Provide confidence intervals around the forecast.

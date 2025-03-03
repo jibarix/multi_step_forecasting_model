@@ -1,0 +1,12 @@
+pandas
+requests
+supabase
+python-dotenv
+openpyxl
+xlrd
+matplotlib
+statsmodels
+scikit-learn
+prophet
+seaborn
+plotly
