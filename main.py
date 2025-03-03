@@ -29,20 +29,27 @@ import os
 import sys
 import argparse
 import logging
+import json
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Union, Tuple, Any
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, List, Optional, Union, Tuple, Any
 
 # Import project modules
 from config import DATASETS, DEFAULT_START_DATE, DEFAULT_END_DATE
 from config.model_config import (
     get_model_config, LINEAR_MODELS, TIME_SERIES_MODELS, 
-    ENSEMBLE_MODELS, NEURAL_NETWORK_MODELS
+    ENSEMBLE_MODELS, NEURAL_NETWORK_MODELS, LIGHTGBM_MODELS
 )
 from data import DataConnector, DataPreprocessor
-from models import get_model, ModelEvaluator
+from data.data_utils import join_datasets
+from data.multi_frequency import MultiFrequencyHandler
+from models import (
+    get_model, ModelEvaluator, create_model_pipeline, 
+    AnchorVariableSelector, HierarchicalForecaster
+)
 from visualizations import (
     plot_time_series,
     plot_correlation_matrix,
@@ -58,14 +65,11 @@ LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
-# Add after importing logging
-import logging
-import cmdstanpy
+# Configure logging for external libraries
 logging.getLogger('cmdstanpy').setLevel(logging.INFO)
 logging.getLogger('prophet').setLevel(logging.INFO)
 
-# Set environment variable 
-import os
+# Set environment variable for stan
 os.environ['CMDSTAN_VERBOSE'] = 'TRUE'
 
 def parse_arguments():
@@ -89,10 +93,7 @@ def parse_arguments():
     
     parser.add_argument('--model_types', type=str, nargs='+', 
                         default=['linear_regression'],
-                        choices=['linear_regression', 'lasso', 'ridge', 'elastic_net', 
-                                'arima', 'sarima', 'prophet', 'ets',
-                                'random_forest', 'gradient_boosting', 'xgboost',
-                                'lightgbm', 'lightgbm_regressor'],
+                        choices=LINEAR_MODELS + TIME_SERIES_MODELS + ENSEMBLE_MODELS + LIGHTGBM_MODELS,
                         help='Types of models to use (default: linear_regression)')
     
     parser.add_argument('--output_dir', type=str, default='outputs',
@@ -118,8 +119,8 @@ def parse_arguments():
     parser.add_argument('--verbose', action='store_true',
                         help='Enable verbose output')
     
-    # New options for advanced features
-    parser.add_argument('--select_anchors', action='store_true',
+    # Advanced feature options
+    parser.add_argument('--use_dynamic_anchors', action='store_true',
                         help='Automatically select anchor variables based on statistical tests')
     
     parser.add_argument('--num_anchors', type=int, default=3,
@@ -128,8 +129,15 @@ def parse_arguments():
     parser.add_argument('--multi_frequency', action='store_true',
                         help='Enable multi-frequency data handling')
     
+    parser.add_argument('--target_frequency', type=str, default='MS',
+                        choices=['MS', 'QS', 'AS', 'D'],
+                        help='Target frequency for data (default: MS for monthly)')
+    
     parser.add_argument('--hierarchical', action='store_true',
                         help='Enable hierarchical forecasting')
+    
+    parser.add_argument('--hierarchy_file', type=str,
+                        help='JSON file defining hierarchical structure')
     
     parser.add_argument('--reconciliation', type=str, 
                         choices=['bottom_up', 'top_down', 'middle_out', 'optimal'],
@@ -208,6 +216,104 @@ def load_datasets(
                     logger.warning(f"Failed to load dataset {dataset}: {e}")
     
     return datasets
+
+
+def select_dynamic_anchors(
+    datasets: Dict[str, pd.DataFrame],
+    target_col: str,
+    num_anchors: int = 3,
+    verbose: bool = False
+) -> List[str]:
+    """
+    Select optimal anchor variables for forecasting based on statistical criteria.
+    
+    Args:
+        datasets: Dictionary of DataFrames with dataset names as keys
+        target_col: Name of target column
+        num_anchors: Number of anchor variables to select
+        verbose: Whether to display detailed information
+        
+    Returns:
+        List of selected anchor variable names
+    """
+    # Join datasets for analysis
+    joined_data = join_datasets(datasets, date_format='MS', fill_method='ffill')
+    
+    # Initialize anchor selector
+    selector = AnchorVariableSelector()
+    
+    # Find optimal anchors
+    optimal_anchors = selector.get_optimal_anchor_combination(
+        joined_data, target_col, max_anchors=num_anchors
+    )
+    
+    if verbose:
+        logger.info(f"Selected optimal anchor variables: {optimal_anchors}")
+        
+        # Show causality and correlation statistics for selected anchors
+        selector.granger_causality_test(joined_data, target_col)
+        selector.correlation_analysis(joined_data, target_col)
+        
+        for var in optimal_anchors:
+            if var in selector.granger_results:
+                logger.info(f"  {var}: Granger p-value={selector.granger_results[var]['min_p_value']:.4f}")
+            if var in selector.correlation_results:
+                logger.info(f"  {var}: Max correlation={selector.correlation_results[var]['max_correlation']:.4f}")
+    
+    return optimal_anchors
+
+
+def prepare_multi_frequency_dataset(
+    preprocessor: DataPreprocessor,
+    datasets: Dict[str, pd.DataFrame],
+    target_col: str,
+    anchor_variables: List[str],
+    target_frequency: str = 'MS'
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Prepare dataset with mixed-frequency data by aligning to target frequency.
+    
+    Args:
+        preprocessor: DataPreprocessor instance
+        datasets: Dictionary of DataFrames with dataset names as keys
+        target_col: Name of target column
+        anchor_variables: List of anchor variable names
+        target_frequency: Target frequency for alignment
+        
+    Returns:
+        Tuple of (prepared DataFrame, metadata)
+    """
+    # Extract relevant datasets
+    relevant_datasets = {target_col: datasets[target_col]}
+    for var in anchor_variables:
+        if var in datasets:
+            relevant_datasets[var] = datasets[var]
+    
+    # Initialize multi-frequency handler
+    mf_handler = MultiFrequencyHandler()
+    
+    # Align datasets to target frequency
+    aligned_datasets = mf_handler.align_multi_frequency_data(
+        relevant_datasets, target_frequency=target_frequency
+    )
+    
+    # Join aligned datasets
+    joined_data = join_datasets(aligned_datasets, date_format=target_frequency)
+    
+    # Apply standard preprocessing steps
+    # Rename columns to match target and anchor variable names
+    processed_data = joined_data.copy()
+    
+    # Add lag features
+    for col in processed_data.columns:
+        if col != target_col and col != 'date':
+            # Add lag-1 feature
+            processed_data[f"{col}_lag_1"] = processed_data[col].shift(1)
+    
+    # Drop rows with NaN values
+    processed_data = processed_data.dropna()
+    
+    return processed_data, {'aligned_datasets': aligned_datasets}
 
 
 def train_model(
@@ -366,6 +472,7 @@ def train_model(
     
     return model, splits, results
 
+
 def forecast_future(
     model,
     prepared_data: pd.DataFrame,
@@ -391,9 +498,6 @@ def forecast_future(
     import pandas as pd
     import numpy as np
     from sklearn.linear_model import LinearRegression
-    
-    import logging
-    logger = logging.getLogger(__name__)
     
     logger.info(f"Generating {horizon}-period forecast using {model_type}")
     
@@ -512,6 +616,7 @@ def forecast_future(
     
     return forecast_df
 
+
 def compare_models(
     prepared_data: pd.DataFrame,
     target_col: str,
@@ -610,6 +715,54 @@ def compare_models(
         return {'models': {}, 'results': {}, 'splits': splits}, pd.DataFrame()
 
 
+def create_hierarchical_forecast(
+    base_forecasts: Dict[str, pd.DataFrame],
+    hierarchy_structure: Dict[str, List[str]],
+    reconciliation_method: str = 'bottom_up',
+    output_dir: Optional[str] = None
+) -> Dict[str, pd.DataFrame]:
+    """
+    Create hierarchically consistent forecasts across different levels.
+    
+    Args:
+        base_forecasts: Dictionary of DataFrames with forecasts at different levels
+        hierarchy_structure: Dictionary defining hierarchical structure
+        reconciliation_method: Method for reconciliation (bottom_up, top_down, etc.)
+        output_dir: Directory to save outputs
+        
+    Returns:
+        Dictionary with reconciled forecasts
+    """
+    # Initialize hierarchical forecaster
+    forecaster = HierarchicalForecaster(reconciliation_method=reconciliation_method)
+    
+    # Set hierarchy structure
+    forecaster.set_hierarchy(hierarchy_structure)
+    
+    # For each node, add data and forecast
+    for node_id, forecast_df in base_forecasts.items():
+        if 'date' in forecast_df.columns and 'forecast' in forecast_df.columns:
+            forecaster.add_data(node_id, forecast_df, date_col='date', value_col='forecast')
+    
+    # Set base forecasts
+    forecaster.base_forecasts = base_forecasts
+    
+    # Generate reconciled forecasts
+    reconciled_forecasts = forecaster.reconcile_forecasts()
+    
+    # Check coherence
+    coherence_errors = forecaster.check_coherence()
+    logger.info(f"Hierarchical coherence errors: {coherence_errors}")
+    
+    # Save visualization if output_dir provided
+    if output_dir:
+        fig = forecaster.plot_hierarchical_forecast()
+        plots_dir = os.path.join(output_dir, 'plots')
+        fig.savefig(os.path.join(plots_dir, 'hierarchical_forecast.png'))
+    
+    return reconciled_forecasts
+
+
 def create_model_dashboard(
     prepared_data: pd.DataFrame,
     target_col: str,
@@ -700,23 +853,48 @@ def main():
     # Initialize data preprocessor
     preprocessor = DataPreprocessor(connector)
     
+    # Handle dynamic anchor variable selection if requested
+    feature_datasets = args.features
+    if args.use_dynamic_anchors:
+        logger.info("Using dynamic anchor variable selection")
+        anchor_variables = select_dynamic_anchors(
+            datasets, 
+            args.target, 
+            num_anchors=args.num_anchors,
+            verbose=args.verbose
+        )
+        logger.info(f"Selected anchor variables: {anchor_variables}")
+        feature_datasets = anchor_variables
+    
     # Prepare dataset for modeling with enhanced logging
-    logger.info("Preparing dataset for modeling with enhanced logging")
-    prepared_data, metadata = preprocessor.prepare_dataset(
-        target_dataset=args.target,
-        feature_datasets=args.features if args.features else list(datasets.keys()),
-        start_date=args.start_date,
-        end_date=args.end_date,
-        frequency='monthly',  # Auto sales are typically monthly data
-        create_lags=True,
-        lag_periods=[args.feature_lag],  # Use the value from the arguments
-        calculate_changes=True,
-        calculate_rolling=True,
-        rolling_window=3,
-        fill_na_method='interpolate',
-        handle_outliers=True,
-        scale_data=args.scale_data
-    )
+    logger.info("Preparing dataset for modeling")
+    
+    if args.multi_frequency:
+        logger.info("Using multi-frequency data handling")
+        prepared_data, metadata = prepare_multi_frequency_dataset(
+            preprocessor,
+            datasets,
+            args.target,
+            feature_datasets if feature_datasets else list(datasets.keys()),
+            target_frequency=args.target_frequency
+        )
+    else:
+        # Standard preprocessing
+        prepared_data, metadata = preprocessor.prepare_dataset(
+            target_dataset=args.target,
+            feature_datasets=feature_datasets if feature_datasets else list(datasets.keys()),
+            start_date=args.start_date,
+            end_date=args.end_date,
+            frequency='monthly',  # Auto sales are typically monthly data
+            create_lags=True,
+            lag_periods=[args.feature_lag],  # Use the value from the arguments
+            calculate_changes=True,
+            calculate_rolling=True,
+            rolling_window=3,
+            fill_na_method='interpolate',
+            handle_outliers=True,
+            scale_data=args.scale_data
+        )
     
     # Add more detailed logging about the prepared dataset
     logger.info(f"Prepared dataset details:")
@@ -741,7 +919,6 @@ def main():
                     logger.info(f"  Dataset '{dataset}' had {percent:.1f}% of data truncated for alignment")
 
     # Log sample of column names to help understand what features were created
-    sample_cols = []
     lag_cols = [col for col in prepared_data.columns if '_lag_' in col]
     pct_change_cols = [col for col in prepared_data.columns if '_pct_change' in col]
     rolling_cols = [col for col in prepared_data.columns if '_rolling_' in col]
@@ -848,6 +1025,31 @@ def main():
             
             # Store forecast
             forecasts_dict[model_type] = forecast_df
+    
+    # Apply hierarchical forecasting if requested
+    if args.hierarchical and forecasts_dict:
+        logger.info("Applying hierarchical forecasting")
+        
+        # Load hierarchy structure from file if provided
+        if args.hierarchy_file and os.path.exists(args.hierarchy_file):
+            try:
+                with open(args.hierarchy_file, 'r') as f:
+                    hierarchy = json.load(f)
+                
+                # Apply hierarchical reconciliation
+                reconciled_forecasts = create_hierarchical_forecast(
+                    forecasts_dict,
+                    hierarchy,
+                    reconciliation_method=args.reconciliation,
+                    output_dir=args.output_dir
+                )
+                
+                # Use reconciled forecasts for dashboard
+                forecasts_dict = reconciled_forecasts
+                logger.info("Successfully applied hierarchical reconciliation")
+                
+            except Exception as e:
+                logger.error(f"Error in hierarchical forecasting: {e}")
     
     # Create dashboard if requested
     if args.mode in ['dashboard', 'all'] and metrics_df is not None:

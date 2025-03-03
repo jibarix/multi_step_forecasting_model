@@ -142,3 +142,6 @@ def run_all_tests():
         test_model_pipeline()
         
         logger.info("✅ All tests passed!")
+    except Exception as e:
+        logger.error(f"❌ Test failed: {e}")
+        raise
