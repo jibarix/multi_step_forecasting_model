@@ -264,36 +264,62 @@ def train_anchor_models(all_data: pd.DataFrame, combined_anchors: List[str], mod
     
     return anchor_models, model_performance
 
-def generate_anchor_forecasts(gdp_handler: GDPProjectionHandler, gdp_projections: str, anchor_models: Dict[str, Any], output_dir: str) -> pd.DataFrame:
-    """
-    Generate forecasts for anchor variables using GDP projections.
-    """
+def generate_anchor_forecasts(gdp_handler: GDPProjectionHandler, gdp_projections: str, 
+                              anchor_models: Dict[str, Any], output_dir: str) -> pd.DataFrame:
+    """Generate forecasts for anchor variables using GDP projections with equal quarterly distribution."""
     logger.info("=== GENERATING ANCHOR FORECASTS ===")
-    gdp_handler.parse_projections(gdp_projections)
-    monthly_gdp = gdp_handler.get_monthly_projections()
-    forecast_dates = pd.date_range(start='2025-01-01', periods=12, freq='MS')
     
-    if 'gdp_growth' in monthly_gdp.columns and monthly_gdp['gdp_growth'].notnull().all():
-        real_gdp = monthly_gdp['gdp_growth'].values[:12]
-        if len(real_gdp) < 12:
-            real_gdp = np.resize(real_gdp, 12)
-    else:
-        real_gdp = np.zeros(12)
+    # Parse the quarterly GDP projections
+    quarterly_projections = gdp_handler.parse_projections(gdp_projections)
     
+    # Create mapping of quarters to months
+    quarters_to_months = {
+        1: [1, 2, 3],
+        2: [4, 5, 6],
+        3: [7, 8, 9],
+        4: [10, 11, 12]
+    }
+    
+    # Create a dictionary for monthly GDP values
+    monthly_gdp_dict = {}
+    
+    # For each quarterly projection, divide the value equally among its months
+    for _, row in quarterly_projections.iterrows():
+        year = row['year']
+        quarter = row['quarter']
+        gdp_value = row['value']
+        
+        # Divide quarterly value by 3 for each month
+        monthly_value = gdp_value / 3
+        
+        for month in quarters_to_months[quarter]:
+            date_key = pd.Timestamp(year=year, month=month, day=1)
+            monthly_gdp_dict[date_key] = monthly_value
+    
+    # Create forecast dates and dataframe
+    forecast_dates = sorted(monthly_gdp_dict.keys())
     forecast_data = pd.DataFrame({
         'date': forecast_dates,
-        'real_gdp': real_gdp
+        'real_gdp': [monthly_gdp_dict[date] for date in forecast_dates]
     })
-    for anchor, model in anchor_models.items():
-        forecast_data[anchor] = model.predict(forecast_data[['real_gdp']])
-        logger.info(f"Generated {anchor} forecast")
     
+    # Generate predictions for each anchor variable
+    for anchor, model in anchor_models.items():
+        try:
+            predictions = model.predict(forecast_data[['real_gdp']])
+            forecast_data[anchor] = predictions
+            logger.info(f"Generated {anchor} forecast")
+        except Exception as e:
+            logger.error(f"Error generating forecast for {anchor}: {e}")
+            forecast_data[anchor] = np.nan
+    
+    # Format dates for output
     forecast_data['date'] = forecast_data['date'].dt.strftime('%Y-%m-%d')
+    
+    # Save forecast
     forecast_filename = os.path.join(output_dir, 'tier1_anchor_forecasts.csv')
     forecast_data.to_csv(forecast_filename, index=False)
-    logger.info(f"Full Tier 1 forecast saved to {forecast_filename}")
-    logger.info("\n=== ANCHOR FORECASTS ===")
-    logger.info(forecast_data.head().to_string())
+    
     return forecast_data
 
 def plot_gdp_anchor_relationship(all_data: pd.DataFrame, anchor: str, anchor_models: Dict[str, Any], 
