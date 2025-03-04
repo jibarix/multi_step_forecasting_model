@@ -92,24 +92,24 @@ DATASETS = {
         'value_col': 'index',
         'frequency': 'monthly'
     },
-    'retail_sales': {
-        'table': 'retail_sales',
-        'date_col': 'date',
-        'value_col': 'sales',
-        'frequency': 'monthly'
-    },
+    # 'retail_sales': {
+    #     'table': 'retail_sales',
+    #     'date_col': 'date',
+    #     'value_col': 'sales',
+    #     'frequency': 'monthly'
+    # },
     'imports': {
         'table': 'imports',
         'date_col': 'date',
         'value_col': 'value',
         'frequency': 'monthly'
     },
-    'commercial_banking': {
-        'table': 'commercial_banking',
-        'date_col': 'date',
-        'value_col': 'individual_loans',
-        'frequency': 'quarterly'
-    },
+    # 'commercial_banking': {
+    #     'table': 'commercial_banking',
+    #     'date_col': 'date',
+    #     'value_col': 'individual_loans',
+    #     'frequency': 'quarterly'
+    # },
     
     # FRED API datasets
     'federal_funds_rate': {
@@ -142,12 +142,6 @@ DATASETS = {
         'value_col': 'production',
         'frequency': 'monthly'
     },
-    'auto_loan_rate': {
-        'table': 'auto_loan_rate',
-        'date_col': 'date',
-        'value_col': 'rate',
-        'frequency': 'quarterly'
-    },
     'liquidty_credit_facilities': {
         'table': 'liquidty_credit_facilities',
         'date_col': 'date',
@@ -169,7 +163,7 @@ DATASETS = {
     'real_gdp': {
         'table': 'real_gdp',
         'date_col': 'date',
-        'value_col': 'value',
+        'value_col': 'growth',
         'frequency': 'quarterly'
     },
     'gdp_now_forecast': {
