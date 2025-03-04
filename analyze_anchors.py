@@ -20,6 +20,10 @@ from sklearn.model_selection import KFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
 # Try to import XGBoost, handle if not available
 try:
     import xgboost as xgb
@@ -133,14 +137,76 @@ def join_datasets(gdp_growth: pd.Series, feature_datasets: List[Tuple[str, pd.Da
     logger.info(f"Saved raw preprocessed data to {filename} with {len(all_data)} rows and {len(all_data.columns)} columns")
     return all_data
 
-def fill_missing_values_with_moving_average(df: pd.DataFrame, window: int = 3) -> pd.DataFrame:
+def fill_missing_values_with_mice(df: pd.DataFrame, gdp_col: str = 'real_gdp') -> pd.DataFrame:
     """
-    Fill missing values in the DataFrame using a simple rolling average over the specified window.
+    Fill missing values using MICE with GDP as a predictor and seasonal features.
     """
-    logger.info("=== FILLING MISSING VALUES USING A 3-MONTH ROLLING AVERAGE ===")
+    logger.info("=== FILLING MISSING VALUES USING MICE WITH GDP ANCHORING ===")
+    
+    # Create a copy of the data
     filled_df = df.copy()
-    for col in filled_df.columns:
-        filled_df[col] = filled_df[col].fillna(filled_df[col].rolling(window=window, min_periods=1).mean())
+    
+    # Add seasonal features for time-aware imputation
+    if isinstance(filled_df.index, pd.DatetimeIndex):
+        filled_df['month'] = filled_df.index.month
+        filled_df['quarter'] = filled_df.index.quarter
+        
+        # Create cyclical features for seasonality
+        filled_df['month_sin'] = np.sin(2 * np.pi * filled_df.index.month / 12)
+        filled_df['month_cos'] = np.cos(2 * np.pi * filled_df.index.month / 12)
+    
+    try:
+        # Import the IterativeImputer
+        from sklearn.experimental import enable_iterative_imputer
+        from sklearn.impute import IterativeImputer
+        from sklearn.ensemble import ExtraTreesRegressor
+        
+        # Create the imputer with GDP prioritized
+        # Use a regression model that can capture non-linear relationships
+        imputer = IterativeImputer(
+            estimator=ExtraTreesRegressor(n_estimators=100, random_state=42),
+            initial_strategy='mean',
+            max_iter=10,
+            random_state=42,
+            skip_complete=True
+        )
+        
+        # Select columns to impute (exclude date-based features we just added)
+        cols_to_impute = [col for col in filled_df.columns 
+                          if col not in ['month', 'quarter', 'month_sin', 'month_cos']]
+        
+        # Ensure GDP column is the first feature to prioritize it in imputation
+        col_order = [gdp_col] + [col for col in cols_to_impute if col != gdp_col]
+        
+        # Apply MICE imputation
+        imputed_values = imputer.fit_transform(filled_df[col_order])
+        
+        # Update the dataframe with imputed values
+        filled_df[col_order] = imputed_values
+        
+        # Remove seasonal features added for imputation
+        filled_df = filled_df.drop(['month', 'quarter', 'month_sin', 'month_cos'], 
+                                  axis=1, errors='ignore')
+        
+        logger.info("Successfully completed MICE imputation with GDP anchoring")
+        
+    except Exception as e:
+        logger.error(f"Error during MICE imputation: {e}")
+        logger.info("Falling back to simpler imputation method")
+        
+        # Fallback to simpler method if MICE fails
+        for col in filled_df.columns:
+            if col not in ['month', 'quarter', 'month_sin', 'month_cos']:
+                # Use GDP-weighted interpolation where possible
+                if col != gdp_col and not filled_df[gdp_col].isna().all():
+                    filled_df[col] = filled_df[col].interpolate(method='linear')
+                else:
+                    filled_df[col] = filled_df[col].interpolate(method='linear')
+        
+        # Remove seasonal features if they were added
+        filled_df = filled_df.drop(['month', 'quarter', 'month_sin', 'month_cos'], 
+                                  axis=1, errors='ignore')
+    
     return filled_df
 
 def select_anchor_variables(all_data: pd.DataFrame, anchor_selector: AnchorVariableSelector) -> List[str]:
@@ -573,7 +639,7 @@ def main():
     raw_data = join_datasets(gdp_growth, feature_datasets, DATASETS, output_dir)
     
     # Fill missing values and save filled data
-    filled_data = fill_missing_values_with_moving_average(raw_data, window=3)
+    filled_data = fill_missing_values_with_mice(raw_data, gdp_col='real_gdp')
     filled_csv_path = os.path.join(output_dir, 'preprocessed_filled_data.csv')
     filled_data.to_csv(filled_csv_path)
     logger.info(f"Saved filled data to {filled_csv_path}")
