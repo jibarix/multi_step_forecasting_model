@@ -57,7 +57,7 @@ def load_datasets(connector: DataConnector, datasets_config: Dict[str, Any]) -> 
     feature_datasets = []
     for dataset_name in datasets_config.keys():
         # Skip GDPNOW data (and real_gdp is handled separately)
-        if dataset_name in ['real_gdp', 'gdp_now_forecast']:
+        if dataset_name in ['real_gdp', 'gdp_now_forecast', 'auto_sales']:
             continue
         try:
             df = connector.fetch_dataset(dataset_name)
@@ -308,7 +308,7 @@ def generate_anchor_forecasts(gdp_handler: GDPProjectionHandler, gdp_projections
         try:
             predictions = model.predict(forecast_data[['real_gdp']])
             forecast_data[anchor] = predictions
-            logger.info(f"Generated {anchor} forecast")
+            logger.info(f"Generated {anchor} forecast: values range from {predictions.min():.2f} to {predictions.max():.2f}")
         except Exception as e:
             logger.error(f"Error generating forecast for {anchor}: {e}")
             forecast_data[anchor] = np.nan
@@ -320,7 +320,148 @@ def generate_anchor_forecasts(gdp_handler: GDPProjectionHandler, gdp_projections
     forecast_filename = os.path.join(output_dir, 'tier1_anchor_forecasts.csv')
     forecast_data.to_csv(forecast_filename, index=False)
     
+    # Add debugging info
+    logger.info("=== FORECAST DATA SAMPLE ===")
+    logger.info(f"\n{forecast_data.head(2).to_string()}")
+    logger.info(f"Forecast columns: {forecast_data.columns.tolist()}")
+    
     return forecast_data
+
+def train_anchor_models(all_data: pd.DataFrame, combined_anchors: List[str], model_types: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Train multiple models to predict each anchor from GDP and select the best model based on RMSE.
+    """
+    logger.info("=== TRAINING GDP-TO-ANCHOR MODELS ===")
+    anchor_models = {}
+    model_performance = {}
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    
+    for anchor in combined_anchors:
+        logger.info(f"\nTraining models for {anchor}:")
+        X = all_data[['real_gdp']].dropna()
+        y = all_data[anchor].loc[X.index]
+        
+        if y.isnull().all():
+            logger.error(f"Skipping training for {anchor}: target variable is entirely NaN.")
+            continue
+        if y.isnull().any():
+            logger.warning(f"Missing values found for {anchor}, dropping missing entries.")
+            valid_idx = y.dropna().index
+            X = X.loc[valid_idx]
+            y = y.loc[valid_idx]
+            if len(y) == 0:
+                logger.error(f"Skipping training for {anchor}: no available data after dropping NaNs.")
+                continue
+        
+        anchor_perf = {}
+        for model_name, model in model_types.items():
+            try:
+                # Create a fresh model clone for each anchor to avoid model contamination
+                if hasattr(model, 'get_params'):
+                    fresh_model = type(model)(**model.get_params())
+                else:
+                    # If the model doesn't support get_params, create a new instance
+                    fresh_model = type(model)()
+                
+                pipeline = Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('estimator', fresh_model)
+                ])
+                pipeline.fit(X, y)
+                cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='neg_mean_squared_error')
+                cv_rmse = np.sqrt(-cv_scores.mean())
+                
+                split_idx = int(len(X) * 0.8)
+                X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+                y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+                pipeline.fit(X_train, y_train)
+                y_pred = pipeline.predict(X_test)
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                r2 = r2_score(y_test, y_pred)
+                
+                anchor_perf[model_name] = {
+                    'rmse': rmse,
+                    'cv_rmse': cv_rmse,
+                    'r2': r2,
+                    'model': pipeline
+                }
+                logger.info(f"  {model_name}: RMSE = {rmse:.4f}, CV_RMSE = {cv_rmse:.4f}, R² = {r2:.4f}")
+            except Exception as e:
+                logger.error(f"  Error training {model_name} for {anchor}: {e}")
+        
+        if not anchor_perf:
+            logger.error(f"Skipping {anchor} as no models could be trained due to missing data.")
+            continue
+
+        best_model_name = min(anchor_perf.items(), key=lambda x: x[1]['rmse'])[0]
+        best_model = anchor_perf[best_model_name]['model']
+        anchor_models[anchor] = best_model
+        model_performance[anchor] = {
+            'best_model': best_model_name,
+            'metrics': anchor_perf[best_model_name],
+            'all_models': anchor_perf
+        }
+        logger.info(f"Selected best model for {anchor}: {best_model_name}")
+        
+        # Debug predictions for each anchor
+        sample_gdp = all_data['real_gdp'].median()
+        sample_pred = best_model.predict([[sample_gdp]])[0]
+        logger.info(f"  Test prediction for GDP={sample_gdp:.2f}: {anchor}={sample_pred:.2f}")
+        
+        if hasattr(best_model.named_steps['estimator'], 'coef_'):
+            coef = best_model.named_steps['estimator'].coef_
+            logger.info(f"  Coefficient: {coef[0]:.4f}")
+        if hasattr(best_model.named_steps['estimator'], 'intercept_'):
+            intercept = best_model.named_steps['estimator'].intercept_
+            logger.info(f"  Intercept: {intercept:.4f}")
+    
+    if not anchor_models:
+        logger.error("No anchor models were successfully trained.")
+    
+    return anchor_models, model_performance
+
+def validate_anchor_models(anchor_models: Dict[str, Any], validation_data: pd.DataFrame) -> None:
+    """
+    Validate each anchor model with a common test input to ensure differentiation.
+    """
+    logger.info("=== VALIDATING ANCHOR MODELS ===")
+    
+    # Create a test input with a range of GDP values
+    test_gdp_values = np.linspace(-2, 4, 5)  # Range from -2% to 4% GDP growth
+    results = {}
+    
+    for gdp_value in test_gdp_values:
+        test_input = pd.DataFrame({'real_gdp': [gdp_value]})
+        
+        # Get predictions for each anchor
+        predictions = {}
+        for anchor, model in anchor_models.items():
+            try:
+                pred = model.predict(test_input)[0]
+                predictions[anchor] = pred
+            except Exception as e:
+                logger.error(f"Error validating model for {anchor}: {e}")
+                predictions[anchor] = None
+        
+        results[gdp_value] = predictions
+    
+    # Display results in a table
+    for gdp_value, preds in results.items():
+        logger.info(f"For GDP growth {gdp_value:.2f}%:")
+        for anchor, pred in preds.items():
+            logger.info(f"  {anchor}: {pred}")
+    
+    # Check if predictions are identical
+    unique_predictions = set()
+    for anchor in anchor_models.keys():
+        values = [results[gdp][anchor] for gdp in results if anchor in results[gdp]]
+        prediction_pattern = tuple(values)
+        unique_predictions.add(prediction_pattern)
+    
+    if len(unique_predictions) < len(anchor_models):
+        logger.warning(f"WARNING: Only {len(unique_predictions)} unique prediction patterns for {len(anchor_models)} models!")
+    else:
+        logger.info(f"Validation successful: {len(unique_predictions)} unique prediction patterns for {len(anchor_models)} models.")
 
 def plot_gdp_anchor_relationship(all_data: pd.DataFrame, anchor: str, anchor_models: Dict[str, Any], 
                                  model_performance: Dict[str, Any], output_dir: str) -> None:
@@ -379,6 +520,34 @@ def check_and_print_gdp_data(gdp_data):
     null_counts = gdp_data.isnull().sum()
     logger.info(f"Null value counts:\n{null_counts}")
 
+def plot_model_differences(anchor_models: Dict[str, Any], output_dir: str) -> None:
+    """
+    Plot predictions from each model over a range of GDP values
+    to visualize differences between models.
+    """
+    plt.figure(figsize=(12, 8))
+    
+    # Create a range of GDP values
+    gdp_values = np.linspace(-4, 6, 100)  # Range from -4% to 6% GDP growth
+    X_test = pd.DataFrame({'real_gdp': gdp_values})
+    
+    # Generate predictions for each anchor
+    for anchor, model in anchor_models.items():
+        try:
+            predictions = model.predict(X_test)
+            plt.plot(gdp_values, predictions, label=anchor)
+        except Exception as e:
+            logger.error(f"Error generating predictions for {anchor}: {e}")
+    
+    plt.xlabel('GDP Growth (%)')
+    plt.ylabel('Predicted Value')
+    plt.title('Anchor Model Predictions vs GDP Growth')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(output_dir, 'model_prediction_curves.png'))
+    plt.close()
+    logger.info(f"Saved model prediction curves to {os.path.join(output_dir, 'model_prediction_curves.png')}")
+
 def main():
     # Initialize components
     connector = DataConnector()
@@ -422,6 +591,12 @@ def main():
     
     # Train models for each anchor
     anchor_models, model_performance = train_anchor_models(filled_data, combined_anchors, model_types)
+    
+    # Validate the trained models
+    validate_anchor_models(anchor_models, filled_data)
+    
+    # Plot model differences to visualize variation
+    plot_model_differences(anchor_models, output_dir)
     
     # Generate forecasts
     forecast_data = generate_anchor_forecasts(gdp_handler, gdp_projections, anchor_models, output_dir)
