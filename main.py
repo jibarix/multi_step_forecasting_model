@@ -1,28 +1,27 @@
 #!/usr/bin/env python
 """
-Enhanced main script for auto sales forecasting model.
+Enhanced main script for auto sales forecasting model with GDP-anchored multi-stage forecasting.
 
 This script provides a complete pipeline for:
 1. Data acquisition from databases
-2. Data preprocessing and feature engineering
-3. Model training and evaluation
-4. Forecasting future values
+2. GDP-anchored model training with dimension reduction
+3. Multi-stage forecasting with GDP projections
+4. Model evaluation and scenario analysis
 5. Visualization and reporting
-6. Model comparison and dashboard generation
 
 Usage:
     python main.py [--target TARGET] [--features FEATURES [FEATURES ...]]
                   [--start_date START_DATE] [--end_date END_DATE]
                   [--forecast_horizon FORECAST_HORIZON]
+                  [--gdp_projections GDP_PROJECTIONS]
                   [--model_types MODEL_TYPES [MODEL_TYPES ...]]
                   [--output_dir OUTPUT_DIR]
                   [--mode {train,forecast,evaluate,compare,dashboard,all}]
+                  [--dimension_reduction {pca,clustering,hybrid,none}]
 
 Example:
-    python main.py --target auto_sales --features unemployment_rate gas_price
-                  --start_date 2015-01-01 --forecast_horizon 12
-                  --model_types linear_regression random_forest prophet
-                  --mode compare
+    python main.py --target auto_sales --gdp_projections "2025.1:-1.8,2025.2:2.0"
+                  --dimension_reduction hybrid --mode forecast
 """
 
 import os
@@ -50,15 +49,10 @@ from models import (
     get_model, ModelEvaluator, create_model_pipeline, 
     AnchorVariableSelector, HierarchicalForecaster
 )
-from visualizations import (
-    plot_time_series,
-    plot_correlation_matrix,
-    plot_forecast,
-    plot_feature_importance,
-    plot_model_comparison,
-    plot_residuals,
-    create_dashboard
-)
+from models.multi_stage_forecaster import MultiStageForecastEngine, run_multi_stage_forecast
+from models.gdp_projection_handler import GDPProjectionHandler, parse_gdp_input
+from dimension_reduction.pca_handler import PCAHandler
+from dimension_reduction.feature_clustering import FeatureClustering, cluster_gdp_related_features
 
 # Set up logging
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -119,12 +113,34 @@ def parse_arguments():
     parser.add_argument('--verbose', action='store_true',
                         help='Enable verbose output')
     
+    # GDP-related options
+    parser.add_argument('--gdp_projections', type=str, default=None,
+                        help='GDP projections in format "2025.1:-1.8,2025.2:2.0"')
+    
+    parser.add_argument('--gdp_column', type=str, default='real_gdp',
+                        help='Name of GDP column (default: real_gdp)')
+    
+    parser.add_argument('--multi_scenario', action='store_true',
+                        help='Enable multi-scenario analysis')
+    
+    parser.add_argument('--scenarios_file', type=str, default=None,
+                        help='JSON file with GDP scenarios')
+    
+    # Dimension reduction options
+    parser.add_argument('--dimension_reduction', type=str, 
+                        choices=['pca', 'clustering', 'hybrid', 'none'],
+                        default='hybrid',
+                        help='Dimension reduction method (default: hybrid)')
+    
+    parser.add_argument('--num_components', type=int, default=None,
+                        help='Number of components or clusters (if None, determined automatically)')
+    
     # Advanced feature options
     parser.add_argument('--use_dynamic_anchors', action='store_true',
                         help='Automatically select anchor variables based on statistical tests')
     
-    parser.add_argument('--num_anchors', type=int, default=3,
-                        help='Number of anchor variables to select (default: 3)')
+    parser.add_argument('--num_anchors', type=int, default=5,
+                        help='Number of anchor variables to select (default: 5)')
     
     parser.add_argument('--multi_frequency', action='store_true',
                         help='Enable multi-frequency data handling')
@@ -143,6 +159,15 @@ def parse_arguments():
                         choices=['bottom_up', 'top_down', 'middle_out', 'optimal'],
                         default='bottom_up',
                         help='Method for hierarchical forecast reconciliation (default: bottom_up)')
+    
+    # Confidence interval options
+    parser.add_argument('--confidence_level', type=float, default=0.95,
+                        help='Confidence level for interval estimation (default: 0.95)')
+    
+    parser.add_argument('--interval_method', type=str,
+                        choices=['parametric', 'bootstrap', 'montecarlo'],
+                        default='parametric',
+                        help='Method for confidence interval estimation (default: parametric)')
     
     return parser.parse_args()
 
@@ -163,8 +188,9 @@ def prepare_output_directory(output_dir: str):
     models_dir = os.path.join(output_dir, 'models')
     data_dir = os.path.join(output_dir, 'data')
     dashboard_dir = os.path.join(output_dir, 'dashboard')
+    scenarios_dir = os.path.join(output_dir, 'scenarios')
     
-    for directory in [plots_dir, models_dir, data_dir, dashboard_dir]:
+    for directory in [plots_dir, models_dir, data_dir, dashboard_dir, scenarios_dir]:
         if not os.path.exists(directory):
             os.makedirs(directory)
 
@@ -218,607 +244,260 @@ def load_datasets(
     return datasets
 
 
-def select_dynamic_anchors(
-    datasets: Dict[str, pd.DataFrame],
-    target_col: str,
-    num_anchors: int = 3,
+def train_multistage_forecaster(
+    data: pd.DataFrame,
+    target_column: str,
+    gdp_column: str = 'real_gdp',
+    dimension_reduction: str = 'hybrid',
+    num_anchors: int = 5,
+    output_dir: Optional[str] = None,
+    test_size: float = 0.2,
+    save_model: bool = True,
     verbose: bool = False
-) -> List[str]:
+) -> MultiStageForecastEngine:
     """
-    Select optimal anchor variables for forecasting based on statistical criteria.
+    Train a multi-stage forecaster with GDP anchoring.
     
     Args:
-        datasets: Dictionary of DataFrames with dataset names as keys
-        target_col: Name of target column
+        data: DataFrame with target, GDP and features
+        target_column: Name of target column
+        gdp_column: Name of GDP column
+        dimension_reduction: Dimension reduction method
         num_anchors: Number of anchor variables to select
-        verbose: Whether to display detailed information
-        
-    Returns:
-        List of selected anchor variable names
-    """
-    # Join datasets for analysis
-    joined_data = join_datasets(datasets, date_format='MS', fill_method='ffill')
-    
-    # Initialize anchor selector
-    selector = AnchorVariableSelector()
-    
-    # Find optimal anchors
-    optimal_anchors = selector.get_optimal_anchor_combination(
-        joined_data, target_col, max_anchors=num_anchors
-    )
-    
-    if verbose:
-        logger.info(f"Selected optimal anchor variables: {optimal_anchors}")
-        
-        # Show causality and correlation statistics for selected anchors
-        selector.granger_causality_test(joined_data, target_col)
-        selector.correlation_analysis(joined_data, target_col)
-        
-        for var in optimal_anchors:
-            if var in selector.granger_results:
-                logger.info(f"  {var}: Granger p-value={selector.granger_results[var]['min_p_value']:.4f}")
-            if var in selector.correlation_results:
-                logger.info(f"  {var}: Max correlation={selector.correlation_results[var]['max_correlation']:.4f}")
-    
-    return optimal_anchors
-
-
-def prepare_multi_frequency_dataset(
-    preprocessor: DataPreprocessor,
-    datasets: Dict[str, pd.DataFrame],
-    target_col: str,
-    anchor_variables: List[str],
-    target_frequency: str = 'MS'
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    Prepare dataset with mixed-frequency data by aligning to target frequency.
-    
-    Args:
-        preprocessor: DataPreprocessor instance
-        datasets: Dictionary of DataFrames with dataset names as keys
-        target_col: Name of target column
-        anchor_variables: List of anchor variable names
-        target_frequency: Target frequency for alignment
-        
-    Returns:
-        Tuple of (prepared DataFrame, metadata)
-    """
-    # Extract relevant datasets
-    relevant_datasets = {target_col: datasets[target_col]}
-    for var in anchor_variables:
-        if var in datasets:
-            relevant_datasets[var] = datasets[var]
-    
-    # Initialize multi-frequency handler
-    mf_handler = MultiFrequencyHandler()
-    
-    # Align datasets to target frequency
-    aligned_datasets = mf_handler.align_multi_frequency_data(
-        relevant_datasets, target_frequency=target_frequency
-    )
-    
-    # Join aligned datasets
-    joined_data = join_datasets(aligned_datasets, date_format=target_frequency)
-    
-    # Apply standard preprocessing steps
-    # Rename columns to match target and anchor variable names
-    processed_data = joined_data.copy()
-    
-    # Add lag features
-    for col in processed_data.columns:
-        if col != target_col and col != 'date':
-            # Add lag-1 feature
-            processed_data[f"{col}_lag_1"] = processed_data[col].shift(1)
-    
-    # Drop rows with NaN values
-    processed_data = processed_data.dropna()
-    
-    return processed_data, {'aligned_datasets': aligned_datasets}
-
-
-def train_model(
-    prepared_data: pd.DataFrame,
-    target_col: str,
-    model_type: str,
-    test_size: float = 0.2,
-    output_dir: Optional[str] = None,
-    save_model: bool = False,
-    verbose: bool = False
-) -> Tuple[Union[object, Dict[str, object]], Dict[str, pd.DataFrame], Dict[str, Any]]:
-    """
-    Train a forecasting model on prepared data.
-    
-    Args:
-        prepared_data: DataFrame with prepared data.
-        target_col: Name of target column.
-        model_type: Type of model to train.
-        test_size: Fraction of data to use for testing.
-        output_dir: Directory to save outputs.
-        save_model: Whether to save the trained model.
-        verbose: Whether to enable verbose output.
-        
-    Returns:
-        Tuple of (trained model or models, split data dict, training results).
-    """
-    logger.info(f"Training {model_type} model")
-    
-    # Initialize preprocessor to use split_train_test
-    preprocessor = DataPreprocessor()
-    
-    # Split data into train and test sets
-    splits = preprocessor.split_train_test(
-        prepared_data,
-        target_col=target_col,
-        test_size=test_size,
-        time_based=True  # Use time-based split for time series data
-    )
-    
-    # Get model instance
-    model = get_model(model_type)
-    
-    # Fit model based on type
-    if model_type in TIME_SERIES_MODELS:
-        # For time series models, prepare the training data differently
-        train_df = splits['X_train'].copy()
-        train_df[target_col] = splits['y_train']
-        
-        # Extract date index (if needed)
-        date_index = train_df.index
-        
-        # Determine exogenous columns (all except target)
-        exog_cols = train_df.columns.tolist()
-        if target_col in exog_cols:
-            exog_cols.remove(target_col)
-        
-        model.fit(
-            train_df,
-            target_col=target_col,
-            date_col='date' if 'date' in train_df.columns else None,
-            exog_cols=exog_cols if exog_cols else None
-        )
-    else:
-        # For standard ML models, directly fit using the training split
-        model.fit(splits['X_train'], splits['y_train'])
-    
-    # Evaluate model
-    if model_type in TIME_SERIES_MODELS:
-        test_df = splits['X_test'].copy()
-        test_df[target_col] = splits['y_test']
-        metrics = model.evaluate(test_df, target_col=target_col)
-    else:
-        metrics = model.evaluate(splits['X_test'], splits['y_test'])
-    
-    # Get predictions
-    if model_type in TIME_SERIES_MODELS:
-        predictions = model.predict(
-            steps=len(splits['X_test']),
-            future_exog=splits['X_test'] if hasattr(model, 'exog_cols') and model.exog_cols else None,
-            include_history=False
-        )
-        y_pred = predictions['forecast'].values
-    else:
-        y_pred = model.predict(splits['X_test'])
-    
-    # Calculate residuals
-    residuals = splits['y_test'].values - y_pred
-    
-    # Log evaluation metrics
-    logger.info("Model evaluation metrics:")
-    for metric, value in metrics.items():
-        logger.info(f"  {metric.upper()}: {value:.4f}")
-    
-    # Save model if requested
-    if save_model and output_dir:
-        models_dir = os.path.join(output_dir, 'models')
-        if not os.path.exists(models_dir):
-            os.makedirs(models_dir)
-        model_file = os.path.join(models_dir, f"{model_type}_model.pkl")
-        try:
-            import pickle  # Import here to keep dependencies local to this block
-            with open(model_file, 'wb') as f:
-                pickle.dump(model, f)
-            logger.info(f"Model successfully saved to {model_file}")
-        except Exception as e:
-            logger.error(f"Failed to save model: {e}")
-    
-    # Get feature importance if available
-    feature_importance = None
-    if hasattr(model, 'get_feature_importance'):
-        try:
-            feature_importance = model.get_feature_importance()
-            logger.info("Feature importance calculated")
-        except Exception as e:
-            logger.warning(f"Could not calculate feature importance: {e}")
-    
-    # Create evaluation visualizations if output directory is provided
-    if output_dir:
-        plots_dir = os.path.join(output_dir, 'plots')
-        if not os.path.exists(plots_dir):
-            os.makedirs(plots_dir)
-        
-        # Plot residuals
-        fig_residuals = plot_residuals(
-            splits['y_test'],
-            y_pred,
-            dates=splits['X_test'].index if hasattr(splits['X_test'], 'index') else None,
-            title=f"{model_type.upper()} Model Residuals"
-        )
-        fig_residuals.savefig(os.path.join(plots_dir, f"{model_type}_residuals.png"))
-        
-        # Plot predictions vs. actual
-        fig_predictions = ModelEvaluator.plot_predictions(
-            splits['y_test'],
-            y_pred,
-            dates=splits['X_test'].index if hasattr(splits['X_test'], 'index') else None,
-            title=f"{model_type.upper()} Predictions vs Actual"
-        )
-        fig_predictions.savefig(os.path.join(plots_dir, f"{model_type}_predictions.png"))
-        
-        # Plot feature importance if available
-        if feature_importance:
-            fig_importance = plot_feature_importance(
-                feature_importance,
-                title=f"{model_type.upper()} Feature Importance"
-            )
-            fig_importance.savefig(os.path.join(plots_dir, f"{model_type}_feature_importance.png"))
-    
-    # Prepare and return results
-    results = {
-        'metrics': metrics,
-        'feature_importance': feature_importance,
-        'residuals': residuals,
-        'predictions': y_pred
-    }
-    
-    return model, splits, results
-
-
-def forecast_future(
-    model,
-    prepared_data: pd.DataFrame,
-    target_col: str,
-    model_type: str,
-    horizon: int = 12,
-    output_dir: Optional[str] = None
-) -> pd.DataFrame:
-    """
-    Generate forecasts for future periods.
-    
-    Args:
-        model: Trained model
-        prepared_data: DataFrame with prepared data
-        target_col: Name of target column
-        model_type: Type of model used
-        horizon: Number of periods to forecast
         output_dir: Directory to save outputs
-        
-    Returns:
-        DataFrame with forecasts
-    """
-    import pandas as pd
-    import numpy as np
-    from sklearn.linear_model import LinearRegression
-    
-    logger.info(f"Generating {horizon}-period forecast using {model_type}")
-    
-    if model_type in TIME_SERIES_MODELS:
-        # For time series models
-        
-        # Get the last date in the data
-        last_date = prepared_data.index[-1]
-        
-        # Generate future dates (assuming monthly frequency)
-        if isinstance(last_date, pd.Timestamp):
-            future_dates = pd.date_range(
-                start=last_date + pd.Timedelta(days=1),
-                periods=horizon,
-                freq='MS'  # Month start
-            )
-        else:
-            future_dates = range(1, horizon + 1)
-        
-        # For models that need exogenous variables, we need to provide them
-        future_exog = None
-        if hasattr(model, 'exog_cols') and model.exog_cols:
-            logger.warning("Time series model requires exogenous variables for forecasting")
-            logger.warning("Using simplistic approach to generate future exogenous variables")
-            future_exog = pd.DataFrame(
-                {col: [prepared_data[col].iloc[-1]] * horizon for col in model.exog_cols},
-                index=future_dates
-            )
-        
-        # Generate forecast using the time series model
-        forecast = model.predict(steps=horizon, future_exog=future_exog)
-        
-        # Create forecast DataFrame
-        if isinstance(forecast, pd.DataFrame):
-            forecast_df = forecast
-            if 'date' not in forecast_df.columns and isinstance(future_dates, pd.DatetimeIndex):
-                forecast_df['date'] = future_dates
-        else:
-            forecast_df = pd.DataFrame({
-                'date': future_dates,
-                'forecast': forecast
-            })
-    
-    else:
-        # For traditional ML models, generate future feature values first
-        
-        if isinstance(prepared_data.index, pd.DatetimeIndex):
-            last_date = prepared_data.index[-1]
-            future_dates = pd.date_range(
-                start=last_date + pd.Timedelta(days=1),
-                periods=horizon,
-                freq='MS'  # Month start
-            )
-        else:
-            last_idx = len(prepared_data)
-            future_dates = range(last_idx, last_idx + horizon)
-        
-        # Get feature columns (exclude the target)
-        feature_cols = [col for col in prepared_data.columns if col != target_col]
-        
-        # Instead of inserting one column at a time, accumulate future features in a dictionary
-        future_feature_dict = {}
-        for col in feature_cols:
-            feature_series = prepared_data[col]
-            x = np.arange(len(feature_series))
-            y = feature_series.values
-            
-            # Fit a simple linear regression for trend extrapolation
-            trend_model = LinearRegression()
-            trend_model.fit(x.reshape(-1, 1), y)
-            
-            future_x = np.arange(len(feature_series), len(feature_series) + horizon)
-            future_y = trend_model.predict(future_x.reshape(-1, 1))
-            
-            future_feature_dict[col] = future_y
-        
-        # Create the future features DataFrame in one step
-        future_features = pd.DataFrame(future_feature_dict, index=future_dates)
-        # Defragment the DataFrame by creating a copy
-        future_features = future_features.copy()
-        
-        # Generate predictions using the trained model
-        future_predictions = model.predict(future_features)
-        
-        # Create forecast DataFrame
-        forecast_df = pd.DataFrame({
-            'date': future_dates,
-            'forecast': future_predictions
-        })
-    
-    # Save forecast if output directory provided
-    if output_dir:
-        import os
-        data_dir = os.path.join(output_dir, 'data')
-        forecast_df.to_csv(os.path.join(data_dir, f"{model_type}_forecast.csv"), index=False)
-        
-        # Generate forecast visualization
-        from visualizations import plot_forecast
-        plots_dir = os.path.join(output_dir, 'plots')
-        
-        # Get historical target data for plotting
-        historical = prepared_data[[target_col]].copy()
-        historical.reset_index(inplace=True)
-        if 'index' in historical.columns:
-            historical.rename(columns={'index': 'date'}, inplace=True)
-        
-        fig_forecast = plot_forecast(
-            historical,
-            forecast_df,
-            target_col=target_col,
-            date_col='date',
-            forecast_col='forecast',
-            title=f"{model_type.upper()} {horizon}-Period Forecast"
-        )
-        fig_forecast.savefig(os.path.join(plots_dir, f"{model_type}_forecast.png"))
-    
-    return forecast_df
-
-
-def compare_models(
-    prepared_data: pd.DataFrame,
-    target_col: str,
-    model_types: List[str],
-    test_size: float = 0.2,
-    output_dir: Optional[str] = None,
-    verbose: bool = False
-) -> Tuple[Dict[str, Any], pd.DataFrame]:
-    """
-    Train and compare multiple models.
-    
-    Args:
-        prepared_data: DataFrame with prepared data
-        target_col: Name of target column
-        model_types: List of model types to compare
-        test_size: Fraction of data to use for testing
-        output_dir: Directory to save outputs
+        test_size: Proportion of data to use for testing
+        save_model: Whether to save the trained model
         verbose: Whether to enable verbose output
         
     Returns:
-        Tuple of (Dictionary with models and results, DataFrame with comparison metrics)
+        Trained MultiStageForecastEngine instance
     """
-    logger.info(f"Comparing {len(model_types)} models: {', '.join(model_types)}")
+    logger.info(f"Training multi-stage forecaster with {dimension_reduction} dimension reduction")
     
-    # Initialize preprocessor to use split_train_test
-    preprocessor = DataPreprocessor()
-    
-    # Split data into train and test sets (same for all models)
-    splits = preprocessor.split_train_test(
-        prepared_data,
-        target_col=target_col,
-        test_size=test_size,
-        time_based=True
+    # Initialize forecaster
+    forecaster = MultiStageForecastEngine(
+        target_column=target_column,
+        gdp_column=gdp_column,
+        dimension_reduction=dimension_reduction,
+        forecasting_approach='ensemble',
+        output_dir=output_dir
     )
     
-    # Dictionary to store models and results
-    models_dict = {}
-    results_dict = {}
-    metrics_list = []
-    
-    # Train and evaluate each model
-    for model_type in model_types:
-        try:
-            logger.info(f"Training and evaluating {model_type} model")
-            
-            # Train model
-            model, _, results = train_model(
-                prepared_data,
-                target_col=target_col,
-                model_type=model_type,
-                test_size=test_size,
-                output_dir=output_dir,
-                verbose=verbose
-            )
-            
-            # Store model and results
-            models_dict[model_type] = model
-            results_dict[model_type] = results
-            
-            # Add metrics to list for comparison
-            metrics = results['metrics'].copy()
-            metrics['model'] = model_type
-            metrics_list.append(metrics)
-            
-        except Exception as e:
-            logger.error(f"Error with model {model_type}: {e}")
-    
-    # Create metrics comparison DataFrame
-    if metrics_list:
-        metrics_df = pd.DataFrame(metrics_list)
-        metrics_df.set_index('model', inplace=True)
-        
-        # Save metrics to CSV
-        if output_dir:
-            data_dir = os.path.join(output_dir, 'data')
-            metrics_df.to_csv(os.path.join(data_dir, 'model_comparison.csv'))
-        
-        # Create model comparison visualization
-        if output_dir:
-            plots_dir = os.path.join(output_dir, 'plots')
-            
-            fig_comparison = plot_model_comparison(
-                metrics_df,
-                metric_cols=['rmse', 'mae', 'r2'],
-                title="Model Performance Comparison"
-            )
-            fig_comparison.savefig(os.path.join(plots_dir, 'model_comparison.png'))
-        
-        return {
-            'models': models_dict,
-            'results': results_dict,
-            'splits': splits
-        }, metrics_df
+    # Set logging level based on verbose flag
+    if verbose:
+        level = logging.DEBUG
     else:
-        logger.error("No models were successfully trained and evaluated")
-        return {'models': {}, 'results': {}, 'splits': splits}, pd.DataFrame()
+        level = logging.INFO
+    logging.getLogger('models.multi_stage_forecaster').setLevel(level)
+    
+    # Fit the model
+    forecaster.fit(
+        data=data,
+        num_anchors=num_anchors,
+        test_size=test_size
+    )
+    
+    if save_model and output_dir:
+        # Save model
+        model_path = os.path.join(output_dir, 'models', f"{target_column}_multistage_model.pkl")
+        forecaster.save(model_path)
+        logger.info(f"Multi-stage forecaster saved to {model_path}")
+    
+    return forecaster
 
 
-def create_hierarchical_forecast(
-    base_forecasts: Dict[str, pd.DataFrame],
-    hierarchy_structure: Dict[str, List[str]],
-    reconciliation_method: str = 'bottom_up',
-    output_dir: Optional[str] = None
-) -> Dict[str, pd.DataFrame]:
+def generate_multistage_forecast(
+    forecaster: MultiStageForecastEngine,
+    gdp_projections: str,
+    historical_data: pd.DataFrame,
+    output_dir: Optional[str] = None,
+    generate_intervals: bool = True,
+    confidence_level: float = 0.95,
+    interval_method: str = 'parametric'
+) -> pd.DataFrame:
     """
-    Create hierarchically consistent forecasts across different levels.
+    Generate forecast using a trained multi-stage forecaster.
     
     Args:
-        base_forecasts: Dictionary of DataFrames with forecasts at different levels
-        hierarchy_structure: Dictionary defining hierarchical structure
-        reconciliation_method: Method for reconciliation (bottom_up, top_down, etc.)
+        forecaster: Trained MultiStageForecastEngine
+        gdp_projections: String with GDP projections
+        historical_data: Historical data for context
         output_dir: Directory to save outputs
+        generate_intervals: Whether to generate confidence intervals
+        confidence_level: Confidence level (e.g., 0.95 for 95%)
+        interval_method: Method for confidence interval estimation
         
     Returns:
-        Dictionary with reconciled forecasts
+        DataFrame with forecast
     """
-    # Initialize hierarchical forecaster
-    forecaster = HierarchicalForecaster(reconciliation_method=reconciliation_method)
+    logger.info("Generating forecast with multi-stage forecaster")
     
-    # Set hierarchy structure
-    forecaster.set_hierarchy(hierarchy_structure)
+    # Parse GDP projections
+    gdp_projections_info, description = parse_gdp_input(gdp_projections)
+    logger.info(f"GDP Projections:\n{description}")
     
-    # For each node, add data and forecast
-    for node_id, forecast_df in base_forecasts.items():
-        if 'date' in forecast_df.columns and 'forecast' in forecast_df.columns:
-            forecaster.add_data(node_id, forecast_df, date_col='date', value_col='forecast')
+    # Generate forecast
+    forecast = forecaster.forecast(gdp_projections, historical_data)
     
-    # Set base forecasts
-    forecaster.base_forecasts = base_forecasts
+    # Generate confidence intervals if requested
+    if generate_intervals:
+        # Implementation depends on the interval_method
+        if interval_method == 'parametric':
+            # Simple parametric intervals based on historical errors
+            target_col = forecaster.target_column
+            forecast_values = forecast[target_col].values
+            
+            # Calculate standard error from historical data
+            if hasattr(forecaster, 'model_metrics') and forecaster.model_metrics:
+                # Use RMSE from model metrics if available
+                try:
+                    model_metrics = next(iter(forecaster.model_metrics.values()))
+                    rmse = model_metrics.get('rmse', model_metrics.get('RMSE', None))
+                    if rmse:
+                        std_error = rmse
+                    else:
+                        # Fallback to standard deviation of target
+                        std_error = historical_data[target_col].std()
+                except:
+                    std_error = historical_data[target_col].std()
+            else:
+                std_error = historical_data[target_col].std()
+            
+            # Calculate margin based on normal distribution quantile
+            import scipy.stats as stats
+            z_score = stats.norm.ppf((1 + confidence_level) / 2)
+            margin = z_score * std_error
+            
+            # Add intervals to forecast
+            forecast[f'{target_col}_lower'] = forecast_values - margin
+            forecast[f'{target_col}_upper'] = forecast_values + margin
+            
+            logger.info(f"Added {confidence_level:.0%} confidence intervals (±{margin:.2f})")
+        
+        elif interval_method == 'bootstrap':
+            # Not implemented yet
+            logger.warning("Bootstrap confidence intervals not yet implemented")
+        
+        elif interval_method == 'montecarlo':
+            # Not implemented yet 
+            logger.warning("Monte Carlo confidence intervals not yet implemented")
     
-    # Generate reconciled forecasts
-    reconciled_forecasts = forecaster.reconcile_forecasts()
-    
-    # Check coherence
-    coherence_errors = forecaster.check_coherence()
-    logger.info(f"Hierarchical coherence errors: {coherence_errors}")
-    
-    # Save visualization if output_dir provided
+    # Save forecast if output directory provided
     if output_dir:
-        fig = forecaster.plot_hierarchical_forecast()
-        plots_dir = os.path.join(output_dir, 'plots')
-        fig.savefig(os.path.join(plots_dir, 'hierarchical_forecast.png'))
+        # Create forecast directory if it doesn't exist
+        forecast_dir = os.path.join(output_dir, 'forecasts')
+        os.makedirs(forecast_dir, exist_ok=True)
+        
+        # Save forecast to CSV
+        forecast_path = os.path.join(forecast_dir, f"{forecaster.target_column}_forecast.csv")
+        forecast.to_csv(forecast_path, index=False)
+        logger.info(f"Forecast saved to {forecast_path}")
+        
+        # Save GDP projections info
+        projections_path = os.path.join(forecast_dir, "gdp_projections.json")
+        with open(projections_path, 'w') as f:
+            json.dump({
+                'description': description,
+                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, f, indent=2)
     
-    return reconciled_forecasts
+    return forecast
 
 
-def create_model_dashboard(
-    prepared_data: pd.DataFrame,
-    target_col: str,
-    model_comparison_results: Dict[str, Any],
-    metrics_df: pd.DataFrame,
-    forecasts_dict: Dict[str, pd.DataFrame],
-    output_dir: str
-) -> None:
+def generate_scenario_forecasts(
+    forecaster: MultiStageForecastEngine,
+    scenarios: Dict[str, str],
+    historical_data: pd.DataFrame,
+    output_dir: Optional[str] = None,
+    generate_intervals: bool = True,
+    confidence_level: float = 0.95
+) -> Dict[str, pd.DataFrame]:
     """
-    Create a comprehensive dashboard with model comparisons and forecasts.
+    Generate forecasts for multiple GDP scenarios.
     
     Args:
-        prepared_data: DataFrame with prepared data
-        target_col: Name of target column
-        model_comparison_results: Dictionary with models, results and splits
-        metrics_df: DataFrame with model comparison metrics
-        forecasts_dict: Dictionary with model forecasts
-        output_dir: Directory to save dashboard
+        forecaster: Trained MultiStageForecastEngine
+        scenarios: Dictionary mapping scenario names to GDP projection strings
+        historical_data: Historical data for context
+        output_dir: Directory to save outputs
+        generate_intervals: Whether to generate confidence intervals
+        confidence_level: Confidence level for intervals
+        
+    Returns:
+        Dictionary mapping scenario names to forecast DataFrames
     """
-    logger.info("Creating comprehensive dashboard")
+    logger.info(f"Generating forecasts for {len(scenarios)} scenarios")
     
-    # Extract data for dashboard
-    results_dict = model_comparison_results['results']
-    splits = model_comparison_results['splits']
+    scenario_forecasts = {}
     
-    # Prepare data for dashboard
-    target_data = prepared_data[[target_col]].copy()
-    target_data.reset_index(inplace=True)
-    if 'index' in target_data.columns:
-        target_data.rename(columns={'index': 'date'}, inplace=True)
+    for scenario_name, gdp_projections in scenarios.items():
+        logger.info(f"Generating forecast for scenario: {scenario_name}")
+        
+        try:
+            # Generate forecast for this scenario
+            forecast = generate_multistage_forecast(
+                forecaster=forecaster,
+                gdp_projections=gdp_projections,
+                historical_data=historical_data,
+                output_dir=None,  # Don't save individual scenario forecasts
+                generate_intervals=generate_intervals,
+                confidence_level=confidence_level
+            )
+            
+            # Add scenario name column
+            forecast['scenario'] = scenario_name
+            
+            # Store forecast
+            scenario_forecasts[scenario_name] = forecast
+            
+        except Exception as e:
+            logger.error(f"Error generating forecast for scenario {scenario_name}: {e}")
     
-    # Get feature importance from all models
-    feature_importance_dict = {}
-    for model_name, results in results_dict.items():
-        if results.get('feature_importance'):
-            feature_importance_dict[model_name] = results['feature_importance']
+    # Save combined scenario forecasts if output directory provided
+    if output_dir and scenario_forecasts:
+        # Create scenarios directory if it doesn't exist
+        scenarios_dir = os.path.join(output_dir, 'scenarios')
+        os.makedirs(scenarios_dir, exist_ok=True)
+        
+        # Combine all scenarios into one DataFrame
+        combined = pd.concat(scenario_forecasts.values(), ignore_index=True)
+        
+        # Save combined forecasts to CSV
+        combined_path = os.path.join(scenarios_dir, f"{forecaster.target_column}_scenarios.csv")
+        combined.to_csv(combined_path, index=False)
+        logger.info(f"Scenario forecasts saved to {combined_path}")
+        
+        # Save scenario definitions
+        definitions_path = os.path.join(scenarios_dir, "scenario_definitions.json")
+        with open(definitions_path, 'w') as f:
+            json.dump(scenarios, f, indent=2)
     
-    # Use the first feature importance if available
-    feature_importance = next(iter(feature_importance_dict.values())) if feature_importance_dict else None
+    return scenario_forecasts
+
+
+def load_scenario_definitions(file_path: str) -> Dict[str, str]:
+    """
+    Load scenario definitions from a JSON file.
     
-    # Create dashboard directory
-    dashboard_dir = os.path.join(output_dir, 'dashboard')
-    if not os.path.exists(dashboard_dir):
-        os.makedirs(dashboard_dir)
-    
-    # Create dashboard using plotly
-    dashboard = create_dashboard(
-        data_dict={'target': target_data},
-        target_col=target_col,
-        forecast_df=next(iter(forecasts_dict.values())) if forecasts_dict else None,
-        feature_importance=feature_importance,
-        model_metrics=metrics_df,
-        output_file=os.path.join(dashboard_dir, 'forecast_dashboard.html')
-    )
-    
-    logger.info(f"Dashboard created and saved to {dashboard_dir}")
+    Args:
+        file_path: Path to JSON file with scenario definitions
+        
+    Returns:
+        Dictionary mapping scenario names to GDP projection strings
+    """
+    try:
+        with open(file_path, 'r') as f:
+            scenarios = json.load(f)
+        
+        # Validate scenario format
+        for name, projection in scenarios.items():
+            if not isinstance(name, str) or not isinstance(projection, str):
+                logger.warning(f"Invalid scenario format: {name}: {projection}")
+        
+        return scenarios
+    except Exception as e:
+        logger.error(f"Error loading scenario definitions: {e}")
+        return {}
 
 
 def main():
@@ -853,41 +532,38 @@ def main():
     # Initialize data preprocessor
     preprocessor = DataPreprocessor(connector)
     
-    # Handle dynamic anchor variable selection if requested
-    feature_datasets = args.features
-    if args.use_dynamic_anchors:
-        logger.info("Using dynamic anchor variable selection")
-        anchor_variables = select_dynamic_anchors(
-            datasets, 
-            args.target, 
-            num_anchors=args.num_anchors,
-            verbose=args.verbose
-        )
-        logger.info(f"Selected anchor variables: {anchor_variables}")
-        feature_datasets = anchor_variables
-    
-    # Prepare dataset for modeling with enhanced logging
+    # Prepare dataset for modeling
     logger.info("Preparing dataset for modeling")
     
+    # Check if GDP column is present, if not, try to load it
+    gdp_column = args.gdp_column
+    if gdp_column not in datasets and 'real_gdp' in DATASETS:
+        logger.info(f"Loading GDP data from {gdp_column} dataset")
+        try:
+            gdp_data = connector.fetch_dataset('real_gdp', args.start_date, args.end_date)
+            datasets[gdp_column] = gdp_data
+        except Exception as e:
+            logger.warning(f"Failed to load GDP dataset: {e}")
+    
+    # Prepare dataset using appropriate method
     if args.multi_frequency:
+        # Handle multi-frequency data (implementation from previous code)
         logger.info("Using multi-frequency data handling")
-        prepared_data, metadata = prepare_multi_frequency_dataset(
-            preprocessor,
-            datasets,
-            args.target,
-            feature_datasets if feature_datasets else list(datasets.keys()),
-            target_frequency=args.target_frequency
+        multi_freq_handler = MultiFrequencyHandler()
+        aligned_datasets = multi_freq_handler.align_multi_frequency_data(
+            datasets, target_frequency=args.target_frequency
         )
+        prepared_data = join_datasets(aligned_datasets, date_format=args.target_frequency)
     else:
-        # Standard preprocessing
+        # Standard preprocessing with forecasting enhancements
         prepared_data, metadata = preprocessor.prepare_dataset(
             target_dataset=args.target,
-            feature_datasets=feature_datasets if feature_datasets else list(datasets.keys()),
+            feature_datasets=list(datasets.keys()),
             start_date=args.start_date,
             end_date=args.end_date,
-            frequency='monthly',  # Auto sales are typically monthly data
+            frequency='monthly',
             create_lags=True,
-            lag_periods=[args.feature_lag],  # Use the value from the arguments
+            lag_periods=[1, 3, 6, 12],  # Enhanced lag structure
             calculate_changes=True,
             calculate_rolling=True,
             rolling_window=3,
@@ -900,182 +576,116 @@ def main():
     logger.info(f"Prepared dataset details:")
     logger.info(f"  Shape: {prepared_data.shape}")
     logger.info(f"  Date range: {prepared_data.index.min()} to {prepared_data.index.max()}")
-    logger.info(f"  Target variable: {args.target}")
-    logger.info(f"  Feature count: {prepared_data.shape[1] - 1}")  # Subtract 1 for target
-
-    # Log information about feature types
-    numeric_features = prepared_data.select_dtypes(include=['number']).columns.tolist()
-    categorical_features = prepared_data.select_dtypes(include=['object', 'category']).columns.tolist()
-    logger.info(f"  Numeric features: {len(numeric_features)}")
-    logger.info(f"  Categorical features: {len(categorical_features)}")
-
-    # Log temporal alignment information if available
-    if 'temporal_alignment' in metadata:
-        alignment = metadata['temporal_alignment']
-        logger.info(f"  Temporal alignment applied: {alignment['aligned']}")
-        if 'truncation_percentages' in alignment:
-            for dataset, percent in alignment['truncation_percentages'].items():
-                if percent > 5:  # Only log significant truncations
-                    logger.info(f"  Dataset '{dataset}' had {percent:.1f}% of data truncated for alignment")
-
-    # Log sample of column names to help understand what features were created
-    lag_cols = [col for col in prepared_data.columns if '_lag_' in col]
-    pct_change_cols = [col for col in prepared_data.columns if '_pct_change' in col]
-    rolling_cols = [col for col in prepared_data.columns if '_rolling_' in col]
-
-    logger.info(f"  Lag features created: {len(lag_cols)}")
-    logger.info(f"  Percent change features created: {len(pct_change_cols)}")
-    logger.info(f"  Rolling statistic features created: {len(rolling_cols)}")
-
-    # Log any potential issues
-    if prepared_data.shape[0] < 30:
-        logger.warning(f"  Warning: Small dataset size ({prepared_data.shape[0]} rows) may affect model quality")
-    if prepared_data.shape[1] > 100:
-        logger.warning(f"  Warning: Large feature count ({prepared_data.shape[1]} columns) may cause overfitting")
     
     # Save prepared data
     data_dir = os.path.join(args.output_dir, 'data')
     prepared_data.to_csv(os.path.join(data_dir, 'prepared_data.csv'))
     
-    # Generate data visualizations
-    plots_dir = os.path.join(args.output_dir, 'plots')
+    # Check if GDP projections are provided
+    has_gdp_projections = args.gdp_projections is not None
     
-    # Time series plot of target variable
-    target_col = args.target
-    fig_time_series = plot_time_series(
-        prepared_data.reset_index(),  # Reset index to convert DatetimeIndex to column
-        columns=[target_col],
-        date_col='index',  # Use 'index' which will contain the datetime values
-        title=f"{target_col.capitalize()} Time Series"
-    )
-    fig_time_series.savefig(os.path.join(plots_dir, f"{target_col}_time_series.png"))
+    # Check if multi-scenario analysis is enabled
+    has_multi_scenario = args.multi_scenario and args.scenarios_file is not None
     
-    # Correlation heatmap
-    fig_corr = plot_correlation_matrix(
-        prepared_data,
-        title="Feature Correlation Matrix"
-    )
-    fig_corr.savefig(os.path.join(plots_dir, "correlation_matrix.png"))
-    
-    # Initialize dictionaries for models and forecasts
-    trained_models = {}
-    forecasts_dict = {}
-    model_comparison_results = None
-    metrics_df = None
-    
-    # Train model if requested
-    if args.mode in ['train', 'all']:
-        logger.info(f"Training single model: {args.model_types[0]}")
-        model, splits, train_results = train_model(
-            prepared_data,
-            target_col=args.target,
-            model_type=args.model_types[0],
-            test_size=args.test_size,
+    # If in training mode or no GDP projections provided, train models
+    if args.mode in ['train', 'all'] or (not has_gdp_projections and not has_multi_scenario):
+        logger.info("Training multi-stage forecaster")
+        
+        # Train multi-stage forecaster
+        multistage_model = train_multistage_forecaster(
+            data=prepared_data,
+            target_column=args.target,
+            gdp_column=gdp_column,
+            dimension_reduction=args.dimension_reduction,
+            num_anchors=args.num_anchors,
             output_dir=args.output_dir,
+            test_size=args.test_size,
             save_model=args.save_model,
             verbose=args.verbose
         )
-        trained_models[args.model_types[0]] = model
-    
-    # Compare models if requested
-    if args.mode in ['compare', 'dashboard', 'all'] and len(args.model_types) > 1:
-        logger.info("Comparing multiple models")
-        model_comparison_results, metrics_df = compare_models(
-            prepared_data,
-            target_col=args.target,
-            model_types=args.model_types,
-            test_size=args.test_size,
-            output_dir=args.output_dir,
-            verbose=args.verbose
-        )
-        
-        # Update trained models
-        if 'models' in model_comparison_results:
-            trained_models.update(model_comparison_results['models'])
-    
-    # Generate forecast if requested
-    if args.mode in ['forecast', 'dashboard', 'all']:
-        logger.info("Generating forecasts")
-        
-        for model_type, model in trained_models.items():
-            # Train model if not already trained
-            if model is None:
-                logger.info(f"Training {model_type} model for forecasting")
-                model, _, _ = train_model(
-                    prepared_data,
-                    target_col=args.target,
-                    model_type=model_type,
-                    test_size=args.test_size,
+    else:
+        # Try to load previously trained model
+        model_path = os.path.join(args.output_dir, 'models', f"{args.target}_multistage_model.pkl")
+        if os.path.exists(model_path):
+            logger.info(f"Loading multi-stage forecaster from {model_path}")
+            try:
+                multistage_model = MultiStageForecastEngine.load(model_path)
+            except Exception as e:
+                logger.error(f"Error loading model: {e}")
+                logger.info("Training new multi-stage forecaster")
+                multistage_model = train_multistage_forecaster(
+                    data=prepared_data,
+                    target_column=args.target,
+                    gdp_column=gdp_column,
+                    dimension_reduction=args.dimension_reduction,
+                    num_anchors=args.num_anchors,
                     output_dir=args.output_dir,
+                    test_size=args.test_size,
                     save_model=args.save_model,
                     verbose=args.verbose
                 )
-                trained_models[model_type] = model
-            
-            # Generate forecast
-            logger.info(f"Generating forecast using {model_type} model")
-            forecast_df = forecast_future(
-                model,
-                prepared_data,
-                target_col=args.target,
-                model_type=model_type,
-                horizon=args.forecast_horizon,
-                output_dir=args.output_dir
-            )
-            
-            # Store forecast
-            forecasts_dict[model_type] = forecast_df
-    
-    # Apply hierarchical forecasting if requested
-    if args.hierarchical and forecasts_dict:
-        logger.info("Applying hierarchical forecasting")
-        
-        # Load hierarchy structure from file if provided
-        if args.hierarchy_file and os.path.exists(args.hierarchy_file):
-            try:
-                with open(args.hierarchy_file, 'r') as f:
-                    hierarchy = json.load(f)
-                
-                # Apply hierarchical reconciliation
-                reconciled_forecasts = create_hierarchical_forecast(
-                    forecasts_dict,
-                    hierarchy,
-                    reconciliation_method=args.reconciliation,
-                    output_dir=args.output_dir
-                )
-                
-                # Use reconciled forecasts for dashboard
-                forecasts_dict = reconciled_forecasts
-                logger.info("Successfully applied hierarchical reconciliation")
-                
-            except Exception as e:
-                logger.error(f"Error in hierarchical forecasting: {e}")
-    
-    # Create dashboard if requested
-    if args.mode in ['dashboard', 'all'] and metrics_df is not None:
-        logger.info("Creating model comparison dashboard")
-        
-        # If we haven't compared models yet, do it now
-        if model_comparison_results is None and len(trained_models) > 1:
-            model_comparison_results, metrics_df = compare_models(
-                prepared_data,
-                target_col=args.target,
-                model_types=list(trained_models.keys()),
-                test_size=args.test_size,
+        else:
+            logger.info("No existing model found, training new multi-stage forecaster")
+            multistage_model = train_multistage_forecaster(
+                data=prepared_data,
+                target_column=args.target,
+                gdp_column=gdp_column,
+                dimension_reduction=args.dimension_reduction,
+                num_anchors=args.num_anchors,
                 output_dir=args.output_dir,
+                test_size=args.test_size,
+                save_model=args.save_model,
                 verbose=args.verbose
             )
-        
-        # Create dashboard
-        if model_comparison_results is not None:
-            create_model_dashboard(
-                prepared_data,
-                target_col=args.target,
-                model_comparison_results=model_comparison_results,
-                metrics_df=metrics_df,
-                forecasts_dict=forecasts_dict,
-                output_dir=args.output_dir
+    
+    # If in forecast mode or GDP projections provided, generate forecasts
+    if args.mode in ['forecast', 'all'] or has_gdp_projections:
+        if has_gdp_projections:
+            logger.info("Generating forecast with provided GDP projections")
+            
+            # Generate forecast
+            forecast = generate_multistage_forecast(
+                forecaster=multistage_model,
+                gdp_projections=args.gdp_projections,
+                historical_data=prepared_data,
+                output_dir=args.output_dir,
+                generate_intervals=True,
+                confidence_level=args.confidence_level,
+                interval_method=args.interval_method
             )
+    
+    # If multi-scenario is enabled, generate scenario forecasts
+    if has_multi_scenario:
+        logger.info("Generating multi-scenario forecasts")
+        
+        # Load scenario definitions
+        scenarios = load_scenario_definitions(args.scenarios_file)
+        
+        if scenarios:
+            # Generate scenario forecasts
+            scenario_forecasts = generate_scenario_forecasts(
+                forecaster=multistage_model,
+                scenarios=scenarios,
+                historical_data=prepared_data,
+                output_dir=args.output_dir,
+                generate_intervals=True,
+                confidence_level=args.confidence_level
+            )
+    
+    # If in evaluate mode, evaluate the model
+    if args.mode in ['evaluate', 'all']:
+        # Implementation depends on specific evaluation needs
+        pass
+    
+    # If in compare mode, compare different models or scenarios
+    if args.mode in ['compare', 'all'] and has_multi_scenario:
+        # Implementation for scenario comparison
+        pass
+    
+    # If in dashboard mode, create interactive dashboard
+    if args.mode in ['dashboard', 'all']:
+        # Implement dashboard creation
+        pass
     
     logger.info("Process completed successfully")
 
