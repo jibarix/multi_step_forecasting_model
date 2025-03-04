@@ -25,8 +25,8 @@ forecasting_project/
 │   └── plots.py                # Plotting utilities
 ├── dimension_reduction/
 │   ├── __init__.py             # Import dimension reduction modules [EMPTY]
-│   ├── pca_handler.py          # PCA implementation for variables [EMPTY]
-│   └── feature_clustering.py   # Variable clustering utilities [EMPTY]
+│   ├── pca_handler.py          # PCA implementation for variables
+│   └── feature_clustering.py   # Variable clustering utilities
 ├── api/
 │   ├── __init__.py             # API module initialization [MISSING]
 │   ├── router.py               # API routing [MISSING]
