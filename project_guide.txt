@@ -1,88 +1,231 @@
-# **Technical Specification for 12-Month Vehicle Sales Forecasting Model Anchored on GDP Growth**  
+# **Technical Specification for Vehicle Sales Forecasting Model with Hybrid GDP Anchoring**  
 
 ## **Objective**  
 
-Develop an econometric forecasting model for **12-month ahead vehicle sales projections** using a structured, multi-step process that:  
+The purpose of this econometric model is to forecast vehicle sales using a multi-step, hierarchical approach that:
 
-1. **Uses GDP growth as the anchor variable**, incorporating:  
-   - **GDPNow** (Federal Reserve Bank of Atlanta) for real-time quarterly nowcasts.  
-   - **Congressional Budget Office (CBO) projections** for long-term GDP growth forecasts.  
-   - These quarterly forecasts serve as the **primary economic drivers** of the vehicle sales model.  
+1. **Anchors on the growth rate of real Gross Domestic Product (GDP)** as measured by the U.S. Bureau of Economic Analysis (BEA) and forecasted using:
+   - **User-provided quarterly GDP projections** in a standardized format
+   - Support for inputs from multiple methodologies, including GDPNow and Congressional Budget Office (CBO) projections
+   - A flexible framework that adapts to different forecast horizons based on provided quarters
 
-2. **Converts quarterly GDP forecasts to monthly values**, ensuring smooth integration into a monthly forecasting model.  
+2. **Implements a hybrid modeling system** that:
+   - Applies both **dimensionality reduction techniques** and **individual variable models**
+   - Captures correlated movements in economic indicators through principal component analysis
+   - Groups similar variables through clustering to balance complexity and interpretability
+   - Maintains individual models for key indicators with unique GDP relationships
 
-3. **Forecasts intermediate economic variables** (e.g., employment, disposable income) at a monthly level based on projected GDP growth.  
+3. **Handles discrepancies in time aggregation** where:
+   - Vehicle sales data is available monthly
+   - GDP and some explanatory variables are provided quarterly
+   - Advanced temporal disaggregation techniques align these different frequencies
 
-4. **Generates a 12-month ahead vehicle sales forecast**, ensuring hierarchical consistency and temporal coherence.  
+4. **Employs a two-tier forecasting process** where:
+   - Tier 1: GDP projections drive intermediate economic indicator forecasts
+   - Tier 2: These indicators inform the vehicle sales forecast model
+   - Optimal feature selection occurs between transformed and raw variables
 
----
-
-## **Step 1: Input Preparation and Temporal Disaggregation**  
-
-### **Quarterly GDP Forecasts as Inputs**  
-- The model takes as input:  
-  - **GDPNow** real-time quarterly nowcasts.  
-  - **CBO long-term GDP projections** (quarterly frequency).  
-- These forecasts drive the projection of **intermediate economic indicators** and ultimately vehicle sales.  
-
-### **Temporal Disaggregation to Monthly Frequency**  
-- Since GDP data is **quarterly**, the model applies **state-of-the-art disaggregation techniques** to convert it into monthly values:  
-  - **Denton proportional adjustment method** (widely used by statistical agencies for aligning quarterly-to-monthly data).  
-  - **Chow-Lin regression-based interpolation**, where additional monthly indicators (e.g., industrial production, employment) guide the distribution.  
-  - **Mixed Data Sampling (MIDAS) regression**, if high-frequency leading indicators are available.  
-- The chosen method ensures **consistency across different time horizons** while preserving key economic patterns.  
+5. **Ensures hierarchical consistency** across different aggregation levels through:
+   - Reconciliation methods for temporal coherence
+   - Consistency checks across related variables
+   - Structured error propagation for realistic confidence intervals
 
 ---
 
-## **Step 2: Forecasting Intermediate Economic Indicators**  
+## **System Architecture**
 
-- Based on the **disaggregated monthly GDP forecasts**, the model projects **other key macroeconomic indicators**, such as:  
-  - **Employment rates**  
-  - **Consumer spending / disposable income**  
-  - **Interest rates (Federal Funds Rate, Treasury yields)**  
-  - **Inflation (CPI, PPI)**  
-- This step ensures that all necessary inputs are at a **monthly frequency**, ready for vehicle sales forecasting.  
+### **Two-Tier Modeling System**
 
-- **Techniques Used:**  
-  - **Vector autoregression (VAR)**: Models interactions between GDP and economic indicators.  
-  - **Principal Component Analysis (PCA)**: Reduces dimensionality and avoids multicollinearity.  
-  - **Error correction models (ECM)**: Adjusts short-term predictions based on long-term GDP trends.  
+The forecasting system consists of two interconnected but independently updatable models:
 
----
+1. **GDP-Anchored Variable Models (Tier 1)**
+   - Transform user-provided GDP projections into forecasts for economic indicators
+   - Can be updated independently as new economic data becomes available
+   - Utilizes dimension reduction, clustering, and individual modeling approaches
 
-## **Step 3: Forecasting Monthly Vehicle Sales**  
+2. **Target Variable Prediction Model (Tier 2)**
+   - Uses outputs from Tier 1 as inputs to predict the target variable (e.g., auto sales)
+   - Automatically selects optimal features from both transformed and raw variables
+   - Employs advanced machine learning techniques (LightGBM, ensembles)
 
-- Once **monthly macroeconomic indicators** are forecasted, they are used to project **vehicle sales** at a 12-month horizon.  
-- The forecasting model is trained on historical data using various techniques:  
-  - **Autoregressive Integrated Moving Average (ARIMA)** with exogenous variables (ARIMAX).  
-  - **Gradient Boosting Methods (XGBoost, LightGBM)** for capturing non-linear relationships.  
-  - **Neural Networks (LSTMs, RNNs)** if long-term dependencies are found in sales patterns.  
-- The best-performing model is **selected based on validation metrics** (RMSE, MAE).  
+### **Data Flow**
+
+```
+User GDP Projections → Temporal Disaggregation → GDP-Anchored Models → 
+Variable Forecasts → Target Model → Sales Forecast
+```
 
 ---
 
-## **Step 4: Ensuring Hierarchical Consistency**  
+## **Step 1: GDP Processing and Temporal Disaggregation**  
 
-- Forecasts must be **consistent across different levels** (e.g., regional vs. national sales, car segments).  
-- The model applies **hierarchical reconciliation techniques**, including:  
-  - **Bottom-up approach**: Aggregates segment-level forecasts into a national total.  
-  - **Top-down approach**: Disaggregates total sales into regional/segment forecasts.  
-  - **MinT (Minimum Trace) reconciliation**: Ensures optimal alignment across levels.  
+### **GDP Projection Inputs**  
+- The system accepts quarterly GDP projections in a standardized format:
+  - `YYYY.Q: X.X` (e.g., `2025.1: -1.8, 2025.2: 2.0`)
+  - These projections define the forecast horizon and scenario
 
----
-
-## **Step 5: Model Evaluation and Validation**  
-
-- **Time-Series Cross-Validation:** Rolling-origin forecast validation ensures model robustness.  
-- **Benchmarking Against Naïve Models:** Model performance is compared against:  
-  - **Last year’s sales trend (seasonal naive benchmark).**  
-  - **GDP growth correlation-based naive models.**  
-- **Scenario Analysis:** Model is stress-tested against economic downturns and recessions.  
+### **Temporal Disaggregation Methods**  
+- Converts quarterly GDP projections to monthly values using:
+  - **Chow-Lin regression-based method** that maintains quarterly totals while distributing to months
+  - **Denton proportional adjustment** for smoother transitions
+  - **State-space models** for incorporating related monthly indicators
 
 ---
 
-## **Implementation Framework**  
+## **Step 2: GDP-Anchored Variable Modeling**  
 
-- **Modular, scalable architecture** to support continuous updates as new GDP forecasts are released.  
-- **Automated data pipeline** for ingesting GDPNow and CBO projections.  
-- **Flexible model selection framework**, allowing for adaptive improvements as more data becomes available.  
+### **Dimension Reduction Approach**
+- **Principal Component Analysis (PCA)** to capture correlated movements across economic variables
+- Models are built to predict principal components from GDP growth
+- Component predictions are transformed back to original variable space
+- Benefits: noise reduction, fewer models to maintain, captures cross-correlations
+
+### **Clustering Approach**
+- Groups similar economic variables using hierarchical or k-means clustering
+- One model per cluster predicts representative variables based on GDP
+- Within-cluster relationships estimate remaining variables
+- Benefits: balance between complexity and interpretability
+
+### **Individual Variable Models**
+- Direct GDP-to-variable models for key economic indicators
+- Captures unique relationships not well-represented in reduced dimensions
+- Benefits: highest interpretability, handles non-linear relationships
+
+### **Hybrid Model Selection**
+- Automated evaluation determines best approach for each variable:
+  - Time series cross-validation to select modeling approach
+  - Ensemble methods to combine predictions when beneficial
+  - Weighting based on historical accuracy
+
+---
+
+## **Step 3: Target Variable Prediction**  
+
+### **Feature Selection Framework**
+- Dynamic selection between:
+  - Principal components from dimension reduction
+  - Cluster-based variable forecasts
+  - Individual variable forecasts
+- Feature importance analysis identifies key drivers of target variable
+- Regularization techniques prevent overfitting
+
+### **Advanced Modeling Techniques**
+- **LightGBM Gradient Boosting** (top performer in M5 competition)
+- **Temporal hierarchical reconciliation** for consistency across time periods
+- **Ensemble methods** combining multiple models
+- **Cross-learning** from related time series when available
+
+---
+
+## **Step 4: Forecast Generation and Analysis**  
+
+### **Scenario Analysis**
+- Generate multiple forecasts based on different GDP projection scenarios
+- Sensitivity analysis to understand GDP elasticity of sales
+- Confidence intervals reflect model and input uncertainty
+
+### **Model Evaluation**
+- Time series cross-validation with expanding windows
+- Benchmarking against naive forecasts and industry standards
+- Out-of-sample testing on held-out periods
+
+### **Visualization and Reporting**
+- Interactive dashboards for forecast exploration
+- Drill-down capabilities for understanding drivers
+- Export functionality for integration with business systems
+
+---
+
+## **Implementation and Usage Guide**
+
+### **System Requirements**
+- Python 3.8+ environment
+- Required packages listed in requirements.txt
+- Database access configured in .env file
+
+### **Basic Usage Flow**
+
+1. **Update GDP-Anchored Models**
+   ```
+   python main.py --mode train --model_types gdp_anchored
+   ```
+
+2. **Update Target Model**
+   ```
+   python main.py --mode train --target auto_sales
+   ```
+
+3. **Generate Forecast with GDP Projections**
+   ```
+   python main.py --mode forecast --target auto_sales --gdp_projections "2025.1:-1.8,2025.2:2.0"
+   ```
+
+4. **Create Comparison Dashboard**
+   ```
+   python main.py --mode dashboard --target auto_sales
+   ```
+
+### **Advanced Options**
+
+- **Temporal Disaggregation Method**
+  ```
+  --disaggregation_method [chow_lin|denton|state_space]
+  ```
+
+- **Feature Selection Control**
+  ```
+  --feature_selection [auto|pca_only|raw_only|hybrid]
+  ```
+
+- **Model Type Selection**
+  ```
+  --model_types [lightgbm|ensemble|prophet|arima]
+  ```
+
+---
+
+## **Technical Implementation Details**
+
+### **Modules and Components**
+
+1. **`data/` Module**
+   - `connectors.py`: Database connection utilities
+   - `preprocessor.py`: Data preprocessing functions
+   - `multi_frequency.py`: Temporal aggregation/disaggregation
+
+2. **`models/` Module**
+   - `anchor_selection.py`: GDP variable relationship identification
+   - `hierarchical_forecaster.py`: Multi-level consistent forecasting
+   - `dimension_reduction/`: PCA and clustering methods
+   - `lightgbm_model.py`: Gradient boosting implementation
+
+3. **`visualization/` Module**
+   - `plots.py`: Standard visualization functions
+   - `dashboard.py`: Interactive reporting tools
+
+### **Data Flow and Processing**
+
+1. **Input Processing**
+   - Parsing GDP projection format
+   - Validation and error handling
+   - Temporal alignment with existing data
+
+2. **Model Training**
+   - Cross-validation with time series splitting
+   - Hyperparameter optimization
+   - Feature importance analysis
+
+3. **Forecast Generation**
+   - Multi-step prediction with error propagation
+   - Confidence interval calculation
+   - Output formatting and visualization
+
+---
+
+## **Future Extensions**
+
+- Integration with external GDP forecast APIs
+- Automated data updates from economic data sources
+- Web API for programmatic access to forecasts
+- Interactive web dashboard for non-technical users
+- Extension to additional vehicle types and market segments
