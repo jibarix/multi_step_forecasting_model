@@ -209,6 +209,67 @@ def fill_missing_values_with_mice(df: pd.DataFrame, gdp_col: str = 'real_gdp') -
     
     return filled_df
 
+def preprocess_for_percentage_changes(df, date_col='date', freq='MS'):
+    """Convert data to percentage changes year-over-year"""
+    # Ensure date is datetime and set as index
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.set_index(date_col)
+    
+    # Ensure frequency
+    df = df.asfreq(freq)
+    
+    # Calculate percentage changes year-over-year for all numeric columns
+    numeric_cols = df.select_dtypes(include=['number']).columns
+    for col in numeric_cols:
+        # Use pct_change with period=12 for monthly data (YoY)
+        # or period=4 for quarterly data (YoY)
+        period = 12 if freq == 'MS' else 4
+        df[f"{col}_pct"] = df[col].pct_change(period) * 100
+    
+    # Drop original level columns and NaN rows from the shifting
+    pct_cols = [f"{col}_pct" for col in numeric_cols]
+    result = df[pct_cols].dropna()
+    
+    # Rename columns back to original names
+    result.columns = numeric_cols
+    
+    return result
+
+def join_percentage_datasets(gdp_growth, feature_datasets, datasets_config, output_dir):
+    """Join datasets after converting to percentage changes"""
+    all_data = pd.DataFrame(index=gdp_growth.index)
+    all_data['real_gdp'] = gdp_growth
+    
+    for name, df in feature_datasets:
+        if 'date' not in df.columns:
+            continue
+            
+        try:
+            # Get frequency from config
+            freq_str = datasets_config[name].get('frequency', 'monthly')
+            pd_freq = get_pd_freq(freq_str)
+            
+            # Convert to percentage change
+            value_col = datasets_config[name]['value_col']
+            df_copy = df[['date', value_col]].copy()
+            df_pct = preprocess_for_percentage_changes(df_copy, freq=pd_freq)
+            
+            # Join with main dataset
+            if not df_pct.empty:
+                df_pct = df_pct.rename(columns={value_col: name})
+                all_data = all_data.join(df_pct, how='outer')
+                logger.info(f"Joined {name} (percentage change): {len(df_pct)} records")
+        except Exception as e:
+            logger.error(f"Error processing {name}: {e}")
+    
+    # Save the combined dataset
+    filename = os.path.join(output_dir, 'percentage_change_data.csv')
+    all_data.to_csv(filename)
+    logger.info(f"Saved percentage change data to {filename}")
+    
+    return all_data
+
 def select_anchor_variables(all_data: pd.DataFrame, anchor_selector: AnchorVariableSelector) -> List[str]:
     """
     Select anchor variables using both a custom selection method and correlation analysis.
@@ -249,6 +310,60 @@ def build_model_types() -> Dict[str, Any]:
             except (ImportError, AttributeError):
                 logger.warning("XGBoost available but XGBRegressor not found, skipping")
     return model_types
+
+def enhanced_anchor_selection():
+    # Use AnchorVariableSelector with Granger test option
+    granger_results = anchor_selector.granger_causality_test(
+        all_data, 'real_gdp', max_lag=4, significance=0.05
+    )
+    
+    # Apply PCA for dimension reduction
+    pca_model = PCAHandler(n_components=5, variance_threshold=0.9)
+    pca_model.fit(all_data.drop(columns=['real_gdp']))
+    
+    # Identify GDP-related components
+    gdp_components = pca_model.find_gdp_related_components(
+        all_data, 'real_gdp', threshold=0.3
+    )
+    
+    # Alternative: Use feature clustering
+    clustering_model, gdp_representatives, avg_corr = cluster_gdp_related_features(
+        all_data, 'real_gdp', correlation_threshold=0.3
+    )
+    
+    # Combine information from multiple selection methods
+    return combined_anchor_list
+
+def apply_time_series_models(data, anchors, gdp_col='real_gdp'):
+    models = {}
+    for anchor in anchors:
+        # Use the specialized TimeSeriesModel
+        ts_model = TimeSeriesModel(model_type='arima')
+        
+        # Prepare data with proper lags
+        prepared_data = data[[gdp_col, anchor]].copy()
+        
+        # Fit with more sophisticated approach
+        ts_model.fit(
+            prepared_data, 
+            target_col=anchor,
+            exog_cols=[gdp_col]
+        )
+        
+        models[anchor] = ts_model
+    
+    return models
+
+def handle_mixed_frequencies(datasets, target_freq='MS'):
+    # Use the MultiFrequencyHandler from data.multi_frequency
+    handler = MultiFrequencyHandler()
+    
+    # Align all datasets to the same frequency
+    aligned_datasets = handler.align_multi_frequency_data(
+        datasets, target_frequency=target_freq
+    )
+    
+    return aligned_datasets
 
 def train_anchor_models(all_data: pd.DataFrame, combined_anchors: List[str], model_types: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
@@ -330,32 +445,19 @@ def train_anchor_models(all_data: pd.DataFrame, combined_anchors: List[str], mod
     
     return anchor_models, model_performance
 
-def generate_anchor_forecasts(gdp_handler: GDPProjectionHandler, gdp_projections: str, 
-                              anchor_models: Dict[str, Any], output_dir: str) -> pd.DataFrame:
-    """Generate forecasts for anchor variables using GDP projections with equal quarterly distribution."""
-    logger.info("=== GENERATING ANCHOR FORECASTS ===")
-    
-    # Parse the quarterly GDP projections
+def generate_anchor_forecasts(gdp_handler, gdp_projections, anchor_models, output_dir):
+    """Generate forecasts for anchor variables using GDP projections"""
+    # Parse GDP projections (these are already percentage changes)
     quarterly_projections = gdp_handler.parse_projections(gdp_projections)
     
-    # Create mapping of quarters to months
-    quarters_to_months = {
-        1: [1, 2, 3],
-        2: [4, 5, 6],
-        3: [7, 8, 9],
-        4: [10, 11, 12]
-    }
-    
-    # Create a dictionary for monthly GDP values
+    # Process to monthly (same as before)
     monthly_gdp_dict = {}
+    quarters_to_months = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12]}
     
-    # For each quarterly projection, divide the value equally among its months
     for _, row in quarterly_projections.iterrows():
         year = row['year']
         quarter = row['quarter']
-        gdp_value = row['value']
-        
-        # Divide quarterly value by 3 for each month
+        gdp_value = row['value']  # Already a percentage change
         monthly_value = gdp_value / 3
         
         for month in quarters_to_months[quarter]:
@@ -369,27 +471,19 @@ def generate_anchor_forecasts(gdp_handler: GDPProjectionHandler, gdp_projections
         'real_gdp': [monthly_gdp_dict[date] for date in forecast_dates]
     })
     
-    # Generate predictions for each anchor variable
+    # Generate predictions - these will now be percentage changes too
     for anchor, model in anchor_models.items():
         try:
             predictions = model.predict(forecast_data[['real_gdp']])
             forecast_data[anchor] = predictions
-            logger.info(f"Generated {anchor} forecast: values range from {predictions.min():.2f} to {predictions.max():.2f}")
+            logger.info(f"Generated {anchor} forecast (pct change): values range from {predictions.min():.2f} to {predictions.max():.2f}")
         except Exception as e:
             logger.error(f"Error generating forecast for {anchor}: {e}")
             forecast_data[anchor] = np.nan
     
-    # Format dates for output
-    forecast_data['date'] = forecast_data['date'].dt.strftime('%Y-%m-%d')
-    
     # Save forecast
-    forecast_filename = os.path.join(output_dir, 'tier1_anchor_forecasts.csv')
+    forecast_filename = os.path.join(output_dir, 'tier1_anchor_forecasts_pct_change.csv')
     forecast_data.to_csv(forecast_filename, index=False)
-    
-    # Add debugging info
-    logger.info("=== FORECAST DATA SAMPLE ===")
-    logger.info(f"\n{forecast_data.head(2).to_string()}")
-    logger.info(f"Forecast columns: {forecast_data.columns.tolist()}")
     
     return forecast_data
 
@@ -621,7 +715,7 @@ def main():
     multi_freq_handler = MultiFrequencyHandler()
     anchor_selector = AnchorVariableSelector()
     
-    # Create output directory based on current datetime
+    # Create output directory
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     output_dir = f'test_output/analyze_anchor_{timestamp}'
     os.makedirs(output_dir, exist_ok=True)
@@ -629,56 +723,132 @@ def main():
     # Load datasets
     gdp_data, feature_datasets = load_datasets(connector, DATASETS)
     
-    # Check GDP data structure
-    check_and_print_gdp_data(gdp_data)
+    # Step 1: Handle mixed frequencies properly
+    datasets_dict = {'real_gdp': gdp_data}
+    for name, df in feature_datasets:
+        datasets_dict[name] = df
     
-    # Preprocess GDP data
-    gdp_growth = preprocess_gdp(gdp_data, multi_freq_handler)
+    aligned_datasets = multi_freq_handler.align_multi_frequency_data(
+        datasets_dict, target_frequency='MS', date_col='date'
+    )
     
-    # Join GDP growth with raw feature datasets and save raw data
-    raw_data = join_datasets(gdp_growth, feature_datasets, DATASETS, output_dir)
+    # Step 2: Convert to percentage changes
+    all_data = pd.DataFrame()
+    for name, df in aligned_datasets.items():
+        if name == 'real_gdp':
+            # GDP already in growth format
+            df_pct = df.copy()
+        else:
+            # Convert to YoY percentage changes
+            value_col = DATASETS[name]['value_col']
+            df_pct = preprocess_for_percentage_changes(df, date_col='date')
+        
+        if all_data.empty:
+            all_data = df_pct
+        else:
+            all_data = all_data.join(df_pct, how='outer')
     
-    # Fill missing values and save filled data
-    filled_data = fill_missing_values_with_mice(raw_data, gdp_col='real_gdp')
-    filled_csv_path = os.path.join(output_dir, 'preprocessed_filled_data.csv')
-    filled_data.to_csv(filled_csv_path)
-    logger.info(f"Saved filled data to {filled_csv_path}")
+    # Step 3: Fill missing values
+    filled_data = fill_missing_values_with_mice(all_data, gdp_col='real_gdp')
+    filled_data.to_csv(os.path.join(output_dir, 'preprocessed_data.csv'))
     
-    # Select anchor variables
-    combined_anchors = select_anchor_variables(filled_data, anchor_selector)
+    # Step 4: Sophisticated anchor selection
+    # 4a. Granger causality test
+    granger_results = anchor_selector.granger_causality_test(
+        filled_data, 'real_gdp', max_lag=4, significance=0.05
+    )
     
+    # 4b. Use PCA for dimension reduction
+    pca_model = PCAHandler(variance_threshold=0.9)
+    pca_model.fit(filled_data.drop(columns=['real_gdp']), target_col='real_gdp')
+    
+    # Find GDP-related components
+    gdp_components = pca_model.find_gdp_related_components(
+        filled_data, 'real_gdp', threshold=0.3
+    )
+    
+    # 4c. Get optimal anchor combination
+    optimal_anchors = anchor_selector.get_optimal_anchor_combination(
+        filled_data, 'real_gdp', max_anchors=5
+    )
+    
+    # Combine insights from multiple methods
+    granger_anchors = [col for col, result in granger_results.items() 
+                      if result['causes_target'] and col != 'real_gdp']
+    pca_anchors = [comp[0] for comp in gdp_components[:3]]
+    combined_anchors = list(set(optimal_anchors + granger_anchors[:3]))
+    
+    # Step 5: Train specialized time series models
+    ts_models = {}
+    for anchor in combined_anchors:
+        try:
+            # Use TimeSeriesModel for enhanced modeling
+            ts_model = TimeSeriesModel(model_type='arima')
+            
+            # Prepare data
+            model_data = filled_data[['real_gdp', anchor]].dropna()
+            
+            # Try ARIMA with GDP as exogenous variable
+            ts_model.fit(
+                model_data,
+                target_col=anchor,
+                exog_cols=['real_gdp']
+            )
+            
+            ts_models[anchor] = ts_model
+            
+        except Exception as e:
+            # Fallback to traditional models if time series model fails
+            logger.warning(f"Time series model failed for {anchor}, using fallback: {e}")
+            model = get_model('linear_regression')
+            X = filled_data[['real_gdp']].dropna()
+            y = filled_data[anchor].loc[X.index].dropna()
+            if len(y) > 10:
+                model.fit(X, y)
+                ts_models[anchor] = model
+    
+    # Step 6: Generate forecasts with confidence intervals
     # Parse GDP projections
-    gdp_projections = "2025.1:-1.8, 2025.2:2.0, 2025.3:2.2, 2025.4:2.5"
     projections_df, proj_desc = parse_gdp_input(gdp_projections)
     logger.info(f"=== GDP PROJECTIONS ===\n{proj_desc}")
     
-    # Build model types
-    model_types = build_model_types()
+    # Generate forecasts using proper models
+    monthly_gdp = gdp_handler.get_monthly_projections()
+    forecast_data = pd.DataFrame({'date': monthly_gdp['date']})
+    forecast_data['real_gdp'] = monthly_gdp['gdp_growth']
     
-    # Train models for each anchor
-    anchor_models, model_performance = train_anchor_models(filled_data, combined_anchors, model_types)
+    for anchor, model in ts_models.items():
+        try:
+            if isinstance(model, TimeSeriesModel):
+                # Use forecast method for time series models
+                forecast = model.forecast(
+                    steps=len(forecast_data),
+                    future_exog=forecast_data[['real_gdp']]
+                )
+                forecast_data[anchor] = forecast['forecast'].values
+            else:
+                # Use predict for traditional models
+                forecast_data[anchor] = model.predict(forecast_data[['real_gdp']])
+                
+            logger.info(f"Generated forecast for {anchor}")
+        except Exception as e:
+            logger.error(f"Error forecasting {anchor}: {e}")
     
-    # Validate the trained models
-    validate_anchor_models(anchor_models, filled_data)
+    # Save forecasts
+    forecast_data.to_csv(os.path.join(output_dir, 'tier1_forecasts.csv'), index=False)
     
-    # Plot model differences to visualize variation
-    plot_model_differences(anchor_models, output_dir)
-    
-    # Generate forecasts
-    forecast_data = generate_anchor_forecasts(gdp_handler, gdp_projections, anchor_models, output_dir)
-    
-    # Create individual plots for each anchor
-    for anchor in combined_anchors:
-        if anchor in anchor_models:
-            try:
-                plot_gdp_anchor_relationship(filled_data, anchor, anchor_models, model_performance, output_dir)
-            except Exception as e:
-                logger.error(f"Error creating plot for {anchor}: {e}")
-    
-    # Create combined forecast plot
+    # Create visualizations
     plot_forecasts(forecast_data, combined_anchors, output_dir)
     
-    logger.info("\nAnchor selection and forecasting process completed successfully!")
+    # Create model evaluation visualizations
+    for anchor in combined_anchors:
+        if anchor in ts_models:
+            try:
+                plot_gdp_anchor_relationship(filled_data, anchor, ts_models, {}, output_dir)
+            except Exception as e:
+                logger.error(f"Error plotting {anchor}: {e}")
+    
+    logger.info("\nEnhanced anchor selection and forecasting completed successfully!")
 
 if __name__ == "__main__":
     main()
