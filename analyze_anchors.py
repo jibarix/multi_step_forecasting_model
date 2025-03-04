@@ -111,26 +111,30 @@ def join_datasets(gdp_growth: pd.Series, feature_datasets: List[Tuple[str, pd.Da
     logger.info("=== JOINING DATASETS (RAW) ===")
     all_data = pd.DataFrame(index=gdp_growth.index)
     all_data['real_gdp'] = gdp_growth
-
+    
     for name, df in feature_datasets:
-        if 'date' in df.columns:
-            try:
-                if 'value_col' not in datasets_config[name]:
-                    raise KeyError("Missing 'value_col' in configuration")
-                value_col = datasets_config[name]['value_col']
-                freq_str = datasets_config[name].get('frequency', 'monthly')
-                pd_freq = get_pd_freq(freq_str)
-                
-                df_aligned = df.copy()
-                df_aligned['date'] = pd.to_datetime(df_aligned['date'], errors='coerce')
-                df_aligned = df_aligned.set_index('date')[[value_col]].rename(columns={value_col: name})
-                if pd_freq:
-                    df_aligned = df_aligned.asfreq(pd_freq)
-                # Outer join preserves all dates from both series.
-                all_data = all_data.join(df_aligned, how='outer')
-                logger.info(f"Joined {name}: {len(df_aligned)} records")
-            except Exception as e:
-                logger.error(f"Error joining {name}: {e}")
+        if 'date' not in df.columns:
+            continue
+            
+        try:
+            value_col = datasets_config[name]['value_col']
+            freq_str = datasets_config[name].get('frequency', 'monthly')
+            pd_freq = get_pd_freq(freq_str)
+            
+            df_aligned = df.copy()
+            df_aligned['date'] = pd.to_datetime(df_aligned['date'], errors='coerce')
+            df_aligned = df_aligned.set_index('date')
+            
+            # Rename the value column to include the dataset name to avoid conflicts
+            df_aligned = df_aligned[[value_col]].rename(columns={value_col: name})
+            
+            if pd_freq:
+                df_aligned = df_aligned.asfreq(pd_freq)
+            
+            all_data = all_data.join(df_aligned, how='outer')
+            logger.info(f"Joined {name}: {len(df_aligned)} records")
+        except Exception as e:
+            logger.error(f"Error joining {name}: {e}")
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename = os.path.join(output_dir, f'preprocessed_raw_data_{timestamp}.csv')
     all_data.to_csv(filename)
@@ -742,6 +746,10 @@ def main():
             # Convert to YoY percentage changes
             value_col = DATASETS[name]['value_col']
             df_pct = preprocess_for_percentage_changes(df, date_col='date')
+        
+        # Drop the 'id' column if it exists to avoid conflicts
+        if 'id' in df_pct.columns:
+            df_pct = df_pct.drop(columns=['id'])
         
         if all_data.empty:
             all_data = df_pct
