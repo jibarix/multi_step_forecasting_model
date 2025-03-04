@@ -166,6 +166,18 @@ DATASETS = {
         'value_col': 'orders',
         'frequency': 'monthly'
     },
+    'real_gdp': {
+        'table': 'real_gdp',
+        'date_col': 'date',
+        'value_col': 'value',
+        'frequency': 'quarterly'
+    },
+    'gdp_now_forecast': {
+        'table': 'gdp_now_forecast',
+        'date_col': 'date',
+        'value_col': 'forecast',
+        'frequency': 'quarterly'
+    },
 
     # NYU Stern dataset
     'equity_risk_premium': {
@@ -179,20 +191,3 @@ DATASETS = {
 # Default date range for fetching data
 DEFAULT_START_DATE = "2014-01-01"
 DEFAULT_END_DATE = None  # None means fetch up to the latest available data
-
-# SQL templates
-SQL_TEMPLATE_SINGLE_VALUE = """
-SELECT {date_col}, {value_col} 
-FROM {table} 
-WHERE {date_col} >= '{start_date}'
-{end_date_clause}
-ORDER BY {date_col}
-"""
-
-SQL_TEMPLATE_MULTIPLE_VALUES = """
-SELECT {date_col}, {value_cols} 
-FROM {table} 
-WHERE {date_col} >= '{start_date}'
-{end_date_clause}
-ORDER BY {date_col}
-"""
